@@ -152,4 +152,26 @@ Updated: 2026.8.15"</string>
     <string name="net_mode_legacy">Legacy layer (Android 2.1)</string>
     <string name="net_mode_title">Select network layer</string>
     <string name="net_mode_switched">Switched to %1$s, applies on next request</string>
+    <string name="set_shell_title">AI system commands (root)</string>
+    <string name="set_shell_enabled">Let the AI run local commands</string>
+    <string name="set_shell_enabled_summary">Enables the run_shell tool. Read-only commands run at once, state-changing commands need confirmation, dangerous ones are blocked by default.</string>
+    <string name="set_shell_high">Release dangerous commands</string>
+    <string name="set_shell_high_summary">Enable with care. A dialog is still shown, but the AI could repartition, wipe data or make the device unbootable.</string>
+    <string name="set_shell_whitelist">Command whitelist</string>
+    <string name="set_shell_whitelist_summary">One rule per line (regex). Matching commands run without a dialog.</string>
+    <string name="set_shell_whitelist_none">Not set</string>
+    <string name="set_shell_whitelist_count">%1$d rule(s)</string>
+    <string name="set_shell_whitelist_hint">One per line, e.g.
+^getprop
+^dumpsys battery
+settings get</string>
+    <string name="dlg_shell_whitelist_title">Edit whitelist</string>
+    <string name="dlg_shell_whitelist_desc">One Java regex per line; lines starting with # are ignored. Matching commands run without confirmation.</string>
+    <string name="set_shell_test">Check root</string>
+    <string name="set_shell_test_summary">The first check pops up the Magisk prompt; tap allow.</string>
+    <string name="shell_status_testing">Checking root…</string>
+    <string name="shell_status_ok">root available (su works)</string>
+    <string name="shell_status_fail">No root; commands run with normal app privileges</string>
+    <string name="set_shell_enabled_toast">AI system commands enabled; re-enter the chat for the tool to appear</string>
+    <string name="set_shell_high_toast">Dangerous commands released, make sure you accept the risk</string>
 </resources>

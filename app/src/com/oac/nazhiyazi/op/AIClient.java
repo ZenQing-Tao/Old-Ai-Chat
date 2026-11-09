@@ -75,6 +75,13 @@ public class AIClient {
               .append(",\"content\":").append(jsonStr(model.systemPrompt)).append("}");
             first = false;
         }
+        String manual = ShellManual.systemSuffix();
+        if (manual != null) {
+            if (!first) sb.append(",");
+            sb.append("{\"role\":").append(jsonStr("system"))
+              .append(",\"content\":").append(jsonStr(manual)).append("}");
+            first = false;
+        }
         if (history != null) {
             for (ChatMessage m : history) {
                 if (m == null) continue;
@@ -127,10 +134,55 @@ public class AIClient {
               .append("{\"name\":\"get_current_date\",")
               .append("\"description\":\"Get current date and time from device.\",")
               .append("\"parameters\":{\"type\":\"object\",\"properties\":{}")
-              .append(",\"additionalProperties\":false}}}]");
+              .append(",\"additionalProperties\":false}}}");
+            if (isShellToolEnabled()) appendShellTool(sb);
+            sb.append("]");
+        } else if (isShellToolEnabled()) {
+            sb.append(",\"tools\":[");
+            appendShellTool(sb);
+            sb.append("]");
         }
         sb.append("}");
         return sb.toString();
+    }
+
+    /** AI 系统命令工具是否可用（仅看总开关，与 WebSearch 开关解耦） */
+    private static boolean isShellToolEnabled() {
+        try {
+            Context ctx = OACApplication.getContext();
+            if (ctx == null) return false;
+            return SettingsManager.get(ctx).isShellEnabled();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 追加 run_shell 工具（仅在设置页开启「AI 系统命令」时提供）。
+     */
+    private static void appendShellTool(StringBuilder sb) {
+        try {
+            Context ctx = OACApplication.getContext();
+            if (ctx == null) return;
+            if (!SettingsManager.get(ctx).isShellEnabled()) return;
+        } catch (Throwable t) {
+            return;
+        }
+        sb.append(",{\"type\":\"function\",\"function\":{")
+          .append("\"name\":\"run_shell\",")
+          .append("\"description\":\"Run a shell command on the local Android device as root (via su). ")
+          .append("Use it to inspect or tune THIS device: getprop, dumpsys, cat /proc/..., ps, top, df, logcat -d, settings get, pm list, lsmod, cat /sys/... . ")
+          .append("Commands are risk-graded: read-only commands run immediately; commands that change state need the user to confirm a dialog; ")
+          .append("dangerous commands (reboot, rm -rf, dd, mkfs, pm uninstall/disable, writing to /system, setprop persist.*) are blocked unless the user released them in settings. ")
+          .append("Rules: (1) Prefer read-only probes and gather facts before changing anything. ")
+          .append("(2) One change per command; never chain unrelated modifications. ")
+          .append("(3) If the result says refused or cancelled, do NOT retry the same command; explain to the user instead. ")
+          .append("(4) Output is truncated, so keep commands narrow and avoid dumping huge buffers. ")
+          .append("(5) Explain to the user what you change and why, and prefer changes that can be undone.\",")
+          .append("\"parameters\":{\"type\":\"object\",\"properties\":{")
+          .append("\"command\":{\"type\":\"string\",\"description\":\"Full one-line shell command, executed as root\"},")
+          .append("\"purpose\":{\"type\":\"string\",\"description\":\"Short reason shown to the user in the confirm dialog\"}},")
+          .append("\"required\":[\"command\"],\"additionalProperties\":false}}}");
     }
 
     private static void appendOptimizationParams(ModelConfig model, StringBuilder sb) {

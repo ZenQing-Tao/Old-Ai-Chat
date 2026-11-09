@@ -1,0 +1,1199 @@
+--- a/app/AndroidManifest.xml
++++ b/app/AndroidManifest.xml
+@@ -1,8 +1,8 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+     package="com.oac.nazhiyazi.op"
+-    android:versionCode="9"
+-    android:versionName="1.6">
++    android:versionCode="10"
++    android:versionName="1.7-root.1">
+ 
+     <uses-sdk
+         android:minSdkVersion="7"
+--- a/app/src/com/oac/nazhiyazi/op/AIClient.java
++++ b/app/src/com/oac/nazhiyazi/op/AIClient.java
+@@ -73,6 +73,13 @@
+         if (model.systemPrompt != null && model.systemPrompt.length() > 0) {
+             sb.append("{\"role\":").append(jsonStr("system"))
+               .append(",\"content\":").append(jsonStr(model.systemPrompt)).append("}");
++            first = false;
++        }
++        String manual = ShellManual.systemSuffix();
++        if (manual != null) {
++            if (!first) sb.append(",");
++            sb.append("{\"role\":").append(jsonStr("system"))
++              .append(",\"content\":").append(jsonStr(manual)).append("}");
+             first = false;
+         }
+         if (history != null) {
+@@ -127,10 +134,55 @@
+               .append("{\"name\":\"get_current_date\",")
+               .append("\"description\":\"Get current date and time from device.\",")
+               .append("\"parameters\":{\"type\":\"object\",\"properties\":{}")
+-              .append(",\"additionalProperties\":false}}}]");
++              .append(",\"additionalProperties\":false}}}");
++            if (isShellToolEnabled()) appendShellTool(sb);
++            sb.append("]");
++        } else if (isShellToolEnabled()) {
++            sb.append(",\"tools\":[");
++            appendShellTool(sb);
++            sb.append("]");
+         }
+         sb.append("}");
+         return sb.toString();
++    }
++
++    /** AI 系统命令工具是否可用（仅看总开关，与 WebSearch 开关解耦） */
++    private static boolean isShellToolEnabled() {
++        try {
++            Context ctx = OACApplication.getContext();
++            if (ctx == null) return false;
++            return SettingsManager.get(ctx).isShellEnabled();
++        } catch (Throwable t) {
++            return false;
++        }
++    }
++
++    /**
++     * 追加 run_shell 工具（仅在设置页开启「AI 系统命令」时提供）。
++     */
++    private static void appendShellTool(StringBuilder sb) {
++        try {
++            Context ctx = OACApplication.getContext();
++            if (ctx == null) return;
++            if (!SettingsManager.get(ctx).isShellEnabled()) return;
++        } catch (Throwable t) {
++            return;
++        }
++        sb.append(",{\"type\":\"function\",\"function\":{")
++          .append("\"name\":\"run_shell\",")
++          .append("\"description\":\"Run a shell command on the local Android device as root (via su). ")
++          .append("Use it to inspect or tune THIS device: getprop, dumpsys, cat /proc/..., ps, top, df, logcat -d, settings get, pm list, lsmod, cat /sys/... . ")
++          .append("Commands are risk-graded: read-only commands run immediately; commands that change state need the user to confirm a dialog; ")
++          .append("dangerous commands (reboot, rm -rf, dd, mkfs, pm uninstall/disable, writing to /system, setprop persist.*) are blocked unless the user released them in settings. ")
++          .append("Rules: (1) Prefer read-only probes and gather facts before changing anything. ")
++          .append("(2) One change per command; never chain unrelated modifications. ")
++          .append("(3) If the result says refused or cancelled, do NOT retry the same command; explain to the user instead. ")
++          .append("(4) Output is truncated, so keep commands narrow and avoid dumping huge buffers. ")
++          .append("(5) Explain to the user what you change and why, and prefer changes that can be undone.\",")
++          .append("\"parameters\":{\"type\":\"object\",\"properties\":{")
++          .append("\"command\":{\"type\":\"string\",\"description\":\"Full one-line shell command, executed as root\"},")
++          .append("\"purpose\":{\"type\":\"string\",\"description\":\"Short reason shown to the user in the confirm dialog\"}},")
++          .append("\"required\":[\"command\"],\"additionalProperties\":false}}}");
+     }
+ 
+     private static void appendOptimizationParams(ModelConfig model, StringBuilder sb) {
+--- a/app/src/com/oac/nazhiyazi/op/AIRequest.java
++++ b/app/src/com/oac/nazhiyazi/op/AIRequest.java
+@@ -252,7 +252,7 @@
+         // Tool Calls 循环：支持多轮搜索/抓取
+         StringBuilder toolHistory = new StringBuilder();
+         int toolRounds = 0;
+-        final int MAX_TOOL_ROUNDS = 8;
++        final int MAX_TOOL_ROUNDS = 16;
+         while (!mCancelled && toolCallId != null && toolCallName != null && toolRounds < MAX_TOOL_ROUNDS) {
+             toolRounds++;
+             String toolArgs = toolCallArgsBuf.toString();
+@@ -273,7 +273,7 @@
+             // 显示当前操作状态
+             synchronized (mContentBuffer) {
+                 mContentBuffer.append("[正在")
+-                    .append(toolRounds == 1 ? "联网搜索" : "打开网页")
++                    .append(toolLabel(toolCallName))
+                     .append("…]");
+             }
+             scheduleFlush();
+@@ -368,8 +368,27 @@
+             java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat(
+                     "yyyy-MM-dd HH:mm:ss EEEE", java.util.Locale.getDefault());
+             return sdf.format(new java.util.Date());
++        } else if ("run_shell".equals(toolName)) {
++            String command = "";
++            try {
++                org.json.JSONObject json = new org.json.JSONObject(
++                        (argsJson == null || argsJson.length() == 0) ? "{}" : argsJson);
++                command = json.optString("command", "");
++            } catch (Exception e) {
++                return "(shell error: 参数解析失败 " + e.getMessage() + ")";
++            }
++            return ShellGate.run(command);
+         }
+         return "(unknown tool: " + toolName + ")";
++    }
++
++    /** 工具执行期间显示给用户的状态文案 */
++    private static String toolLabel(String toolName) {
++        if ("run_shell".equals(toolName)) return "执行命令";
++        if ("fetch_page".equals(toolName)) return "打开网页";
++        if ("web_search".equals(toolName)) return "联网搜索";
++        if ("get_current_date".equals(toolName)) return "读取时间";
++        return "处理";
+     }
+ 
+     /** 读取错误响应体（复用） */
+@@ -402,6 +421,13 @@
+         if (model.systemPrompt != null && model.systemPrompt.length() > 0) {
+             sb.append("{\"role\":").append(jsonStr("system"))
+               .append(",\"content\":").append(jsonStr(model.systemPrompt)).append("}");
++            first = false;
++        }
++        String manual = ShellManual.systemSuffix();
++        if (manual != null) {
++            if (!first) sb.append(",");
++            sb.append("{\"role\":").append(jsonStr("system"))
++              .append(",\"content\":").append(jsonStr(manual)).append("}");
+             first = false;
+         }
+         if (history != null) {
+--- a/app/src/com/oac/nazhiyazi/op/SettingsManager.java
++++ b/app/src/com/oac/nazhiyazi/op/SettingsManager.java
+@@ -275,4 +275,37 @@
+     public void setNetModeChosen(boolean chosen) {
+         mPrefs.edit().putBoolean(KEY_NET_MODE_CHOSEN, chosen).commit();
+     }
++
++    // ============ AI 系统命令（root shell） ============
++
++    private static final String KEY_SHELL_ENABLED = "shell_enabled";
++    private static final String KEY_SHELL_HIGH = "shell_high_enabled";
++    private static final String KEY_SHELL_WHITELIST = "shell_whitelist";
++
++    /** AI 是否允许调用本地 shell（默认关闭） */
++    public boolean isShellEnabled() {
++        return mPrefs.getBoolean(KEY_SHELL_ENABLED, false);
++    }
++
++    public void setShellEnabled(boolean enabled) {
++        mPrefs.edit().putBoolean(KEY_SHELL_ENABLED, enabled).commit();
++    }
++
++    /** 是否放行高危命令（默认关闭）。开启后高危命令仍会弹窗二次确认。 */
++    public boolean isShellHighEnabled() {
++        return mPrefs.getBoolean(KEY_SHELL_HIGH, false);
++    }
++
++    public void setShellHighEnabled(boolean enabled) {
++        mPrefs.edit().putBoolean(KEY_SHELL_HIGH, enabled).commit();
++    }
++
++    /** 命令白名单：每行一个正则或文本片段，命中即视为安全 */
++    public String getShellWhitelist() {
++        return mPrefs.getString(KEY_SHELL_WHITELIST, "");
++    }
++
++    public void setShellWhitelist(String text) {
++        mPrefs.edit().putString(KEY_SHELL_WHITELIST, text == null ? "" : text).commit();
++    }
+ }
+--- a/app/src/com/oac/nazhiyazi/op/SettingsActivity.java
++++ b/app/src/com/oac/nazhiyazi/op/SettingsActivity.java
+@@ -47,6 +47,9 @@
+     private TextView mTvLanguageValue;
+     private View mRowNetMode;
+     private TextView mTvNetModeValue;
++    private CheckBox mCbShell;
++    private CheckBox mCbShellHigh;
++    private TextView mTvShellWhitelistValue;
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+@@ -71,6 +74,9 @@
+             mTvLanguageValue = (TextView) findViewById(R.id.tv_language_value);
+             mRowNetMode = findViewById(R.id.row_net_mode);
+             mTvNetModeValue = (TextView) findViewById(R.id.tv_net_mode_value);
++            mCbShell = (CheckBox) findViewById(R.id.cb_shell_enabled);
++            mCbShellHigh = (CheckBox) findViewById(R.id.cb_shell_high);
++            mTvShellWhitelistValue = (TextView) findViewById(R.id.tv_shell_whitelist_value);
+ 
+             if (mBtnAddModelInline != null) {
+                 mBtnAddModelInline.setOnClickListener(new View.OnClickListener() {
+@@ -148,6 +154,55 @@
+                 });
+             }
+ 
++            // ===== AI 系统命令（root shell） =====
++            Button btnShellWhitelist = (Button) findViewById(R.id.btn_shell_whitelist);
++            Button btnShellTest = (Button) findViewById(R.id.btn_shell_test);
++            final TextView tvShellStatus = (TextView) findViewById(R.id.tv_shell_status);
++
++            if (mCbShell != null) {
++                mCbShell.setChecked(mSettings.isShellEnabled());
++                mCbShell.setOnClickListener(new View.OnClickListener() {
++                    public void onClick(View v) {
++                        mSettings.setShellEnabled(mCbShell.isChecked());
++                        updateShellUi();
++                        if (mCbShell.isChecked()) {
++                            toast(getString(R.string.set_shell_enabled_toast));
++                        }
++                    }
++                });
++            }
++
++            if (mCbShellHigh != null) {
++                mCbShellHigh.setChecked(mSettings.isShellHighEnabled());
++                mCbShellHigh.setOnClickListener(new View.OnClickListener() {
++                    public void onClick(View v) {
++                        mSettings.setShellHighEnabled(mCbShellHigh.isChecked());
++                        if (mCbShellHigh.isChecked()) {
++                            Toast.makeText(SettingsActivity.this, R.string.set_shell_high_toast,
++                                    Toast.LENGTH_LONG).show();
++                        }
++                    }
++                });
++            }
++
++            if (btnShellWhitelist != null) {
++                btnShellWhitelist.setOnClickListener(new View.OnClickListener() {
++                    public void onClick(View v) {
++                        showShellWhitelistDialog();
++                    }
++                });
++            }
++
++            if (btnShellTest != null) {
++                btnShellTest.setOnClickListener(new View.OnClickListener() {
++                    public void onClick(View v) {
++                        testRoot(tvShellStatus);
++                    }
++                });
++            }
++
++            updateShellUi();
++
+             refreshModelList();
+         } catch (Throwable t) {
+             t.printStackTrace();
+@@ -163,6 +218,78 @@
+         }
+         if (m.length() > 100) m = m.substring(0, 100);
+         return m;
++    }
++
++    /** 刷新 shell 相关控件的状态显示 */
++    private void updateShellUi() {
++        if (mTvShellWhitelistValue != null) {
++            String wl = null;
++            try { wl = mSettings.getShellWhitelist(); } catch (Throwable t) {}
++            int count = 0;
++            if (wl != null && wl.trim().length() > 0) {
++                String[] arr = wl.split("\n");
++                for (int i = 0; i < arr.length; i++) {
++                    String line = arr[i] == null ? "" : arr[i].trim();
++                    if (line.length() > 0 && !line.startsWith("#")) count++;
++                }
++            }
++            mTvShellWhitelistValue.setText(count == 0
++                    ? getString(R.string.set_shell_whitelist_none)
++                    : getString(R.string.set_shell_whitelist_count, Integer.valueOf(count)));
++        }
++        if (mCbShellHigh != null) {
++            mCbShellHigh.setEnabled(mCbShell != null && mCbShell.isChecked());
++        }
++    }
++
++    /** 编辑命令白名单 */
++    private void showShellWhitelistDialog() {
++        final EditText et = new EditText(this);
++        et.setSingleLine(false);
++        et.setMinLines(6);
++        et.setGravity(android.view.Gravity.TOP | android.view.Gravity.LEFT);
++        et.setText(mSettings.getShellWhitelist());
++        et.setHint(R.string.set_shell_whitelist_hint);
++
++        AlertDialog.Builder b = new AlertDialog.Builder(this);
++        b.setTitle(R.string.dlg_shell_whitelist_title);
++        b.setMessage(R.string.dlg_shell_whitelist_desc);
++        b.setView(et);
++        b.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
++            public void onClick(DialogInterface d, int which) {
++                String text = et.getText() == null ? "" : et.getText().toString();
++                mSettings.setShellWhitelist(text);
++                updateShellUi();
++            }
++        });
++        b.setNegativeButton(android.R.string.cancel, null);
++        b.show();
++    }
++
++    /** 检测 su 是否可用（首次会拉起 Magisk 授权框） */
++    private void testRoot(final TextView status) {
++        if (status != null) status.setText(R.string.shell_status_testing);
++        try {
++            Toast.makeText(this, R.string.shell_status_testing, Toast.LENGTH_SHORT).show();
++        } catch (Throwable t) {}
++        new Thread(new Runnable() {
++            public void run() {
++                ShellUtil.resetSuCache();
++                final boolean ok = ShellUtil.hasRoot(SettingsActivity.this);
++                runOnUiThread(new Runnable() {
++                    public void run() {
++                        if (status != null) {
++                            status.setText(ok ? R.string.shell_status_ok : R.string.shell_status_fail);
++                        }
++                        try {
++                            Toast.makeText(SettingsActivity.this,
++                                    ok ? R.string.shell_status_ok : R.string.shell_status_fail,
++                                    Toast.LENGTH_LONG).show();
++                        } catch (Throwable t) {}
++                    }
++                });
++            }
++        }).start();
+     }
+ 
+     private void toast(String msg) {
+--- a/app/src/com/oac/nazhiyazi/op/MainActivity.java
++++ b/app/src/com/oac/nazhiyazi/op/MainActivity.java
+@@ -149,6 +149,7 @@
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        try { ShellGate.attach(this); } catch (Throwable t) {}
+ 
+         try {
+             mSettings = SettingsManager.get(this);
+@@ -1503,6 +1504,7 @@
+ 
+     @Override
+     protected void onDestroy() {
++        try { ShellGate.detach(this); } catch (Throwable t) {}
+         for (PendingRequest pr : mPendingRequests.values()) {
+             if (pr != null) {
+                 if (pr.streamHandler != null) {
+--- a/app/res/layout/activity_settings.xml
++++ b/app/res/layout/activity_settings.xml
+@@ -32,6 +32,34 @@
+                 <TextView android:textSize="14.0sp" android:textColor="@color/text_primary" android:id="@+id/tv_net_mode_value" android:paddingRight="4.0dip" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/net_mode_okhttp" />
+             </LinearLayout>
+             <View android:background="@drawable/divider" android:layout_width="fill_parent" android:layout_height="1.0dip" android:layout_marginTop="12.0dip" android:layout_marginBottom="12.0dip" />
++            <TextView android:paddingTop="6.0dip" android:paddingBottom="6.0dip" android:text="@string/set_shell_title" style="@style/SettingsLabel" />
++            <LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:paddingTop="12.0dip" android:layout_width="fill_parent" android:layout_height="wrap_content">
++                <LinearLayout android:orientation="vertical" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_weight="1.0">
++                    <TextView android:text="@string/set_shell_enabled" style="@style/SettingsLabel" />
++                    <TextView android:textSize="12.0sp" android:textColor="@color/text_secondary" android:paddingTop="2.0dip" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/set_shell_enabled_summary" />
++                </LinearLayout>
++                <CheckBox android:id="@+id/cb_shell_enabled" android:layout_width="wrap_content" android:layout_height="wrap_content" />
++            </LinearLayout>
++            <LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:paddingTop="12.0dip" android:layout_width="fill_parent" android:layout_height="wrap_content">
++                <LinearLayout android:orientation="vertical" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_weight="1.0">
++                    <TextView android:text="@string/set_shell_high" style="@style/SettingsLabel" />
++                    <TextView android:textSize="12.0sp" android:textColor="@color/text_secondary" android:paddingTop="2.0dip" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/set_shell_high_summary" />
++                </LinearLayout>
++                <CheckBox android:id="@+id/cb_shell_high" android:layout_width="wrap_content" android:layout_height="wrap_content" />
++            </LinearLayout>
++            <LinearLayout android:gravity="center_vertical" android:orientation="horizontal" android:paddingTop="12.0dip" android:layout_width="fill_parent" android:layout_height="wrap_content">
++                <LinearLayout android:orientation="vertical" android:layout_width="0.0dip" android:layout_height="wrap_content" android:layout_weight="1.0">
++                    <TextView android:text="@string/set_shell_whitelist" style="@style/SettingsLabel" />
++                    <TextView android:textSize="12.0sp" android:textColor="@color/text_secondary" android:paddingTop="2.0dip" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/set_shell_whitelist_summary" />
++                </LinearLayout>
++                <TextView android:textSize="14.0sp" android:textColor="@color/text_primary" android:id="@+id/tv_shell_whitelist_value" android:paddingRight="4.0dip" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/set_shell_whitelist_none" />
++            </LinearLayout>
++            <LinearLayout android:orientation="horizontal" android:paddingTop="8.0dip" android:layout_width="fill_parent" android:layout_height="wrap_content">
++                <Button android:textSize="14.0sp" android:textColor="@color/text_primary" android:id="@+id/btn_shell_whitelist" android:layout_width="0.0dip" android:layout_weight="1.0" android:layout_height="wrap_content" android:text="@string/dlg_shell_whitelist_title" />
++                <Button android:textSize="14.0sp" android:textColor="@color/text_primary" android:id="@+id/btn_shell_test" android:layout_width="0.0dip" android:layout_weight="1.0" android:layout_height="wrap_content" android:text="@string/set_shell_test" />
++            </LinearLayout>
++            <TextView android:textSize="12.0sp" android:textColor="@color/text_secondary" android:id="@+id/tv_shell_status" android:paddingTop="4.0dip" android:layout_width="fill_parent" android:layout_height="wrap_content" android:text="@string/set_shell_test_summary" />
++            <View android:background="@drawable/divider" android:layout_width="fill_parent" android:layout_height="1.0dip" android:layout_marginTop="12.0dip" android:layout_marginBottom="12.0dip" />
+             <TextView android:paddingBottom="6.0dip" android:text="@string/set_models" style="@style/SettingsLabel" />
+             <LinearLayout android:orientation="vertical" android:id="@id/list_models_container" android:layout_width="fill_parent" android:layout_height="wrap_content" />
+             <TextView android:textSize="13.0sp" android:textColor="@color/text_secondary" android:layout_gravity="center" android:id="@id/tv_no_models" android:padding="20.0dip" android:visibility="gone" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/hint_add_model" />
+--- a/app/res/values/strings.xml
++++ b/app/res/values/strings.xml
+@@ -160,4 +160,26 @@
+     <string name="net_mode_legacy">老网络层（Android 2.1）</string>
+     <string name="net_mode_title">选择网络层</string>
+     <string name="net_mode_switched">已切换到 %1$s，下次请求生效</string>
++    <string name="set_shell_title">AI 系统命令（root）</string>
++    <string name="set_shell_enabled">允许 AI 执行本地命令</string>
++    <string name="set_shell_enabled_summary">开启后模型可调用 run_shell。一般命令直接执行，中危命令弹窗确认，高危命令默认拦截。</string>
++    <string name="set_shell_high">放行高危命令</string>
++    <string name="set_shell_high_summary">谨慎开启。开启后仍会弹窗二次确认，但 AI 已可能改分区、删数据、让设备无法开机。</string>
++    <string name="set_shell_whitelist">命令白名单</string>
++    <string name="set_shell_whitelist_summary">每行一条规则（支持正则），命中即视为一般命令，不再弹窗。</string>
++    <string name="set_shell_whitelist_none">未设置</string>
++    <string name="set_shell_whitelist_count">已设 %1$d 条</string>
++    <string name="set_shell_whitelist_hint">每行一条，例如：
++^getprop
++^dumpsys battery
++settings get</string>
++    <string name="dlg_shell_whitelist_title">编辑命令白名单</string>
++    <string name="dlg_shell_whitelist_desc">每行一条，支持 Java 正则；以 # 开头为注释。命中白名单的命令会被当作一般命令直接执行。</string>
++    <string name="set_shell_test">检测 root</string>
++    <string name="set_shell_test_summary">首次检测会弹出 Magisk 授权框，请点允许。</string>
++    <string name="shell_status_testing">正在检测 root…</string>
++    <string name="shell_status_ok">root 可用（su 工作正常）</string>
++    <string name="shell_status_fail">未取得 root，命令将以普通权限执行</string>
++    <string name="set_shell_enabled_toast">已开启 AI 系统命令，重新进入对话后工具生效</string>
++    <string name="set_shell_high_toast">已放行高危命令，请确认你清楚风险</string>
+ </resources>
+--- a/app/res/values-en/strings.xml
++++ b/app/res/values-en/strings.xml
+@@ -152,4 +152,26 @@
+     <string name="net_mode_legacy">Legacy layer (Android 2.1)</string>
+     <string name="net_mode_title">Select network layer</string>
+     <string name="net_mode_switched">Switched to %1$s, applies on next request</string>
++    <string name="set_shell_title">AI system commands (root)</string>
++    <string name="set_shell_enabled">Let the AI run local commands</string>
++    <string name="set_shell_enabled_summary">Enables the run_shell tool. Read-only commands run at once, state-changing commands need confirmation, dangerous ones are blocked by default.</string>
++    <string name="set_shell_high">Release dangerous commands</string>
++    <string name="set_shell_high_summary">Enable with care. A dialog is still shown, but the AI could repartition, wipe data or make the device unbootable.</string>
++    <string name="set_shell_whitelist">Command whitelist</string>
++    <string name="set_shell_whitelist_summary">One rule per line (regex). Matching commands run without a dialog.</string>
++    <string name="set_shell_whitelist_none">Not set</string>
++    <string name="set_shell_whitelist_count">%1$d rule(s)</string>
++    <string name="set_shell_whitelist_hint">One per line, e.g.
++^getprop
++^dumpsys battery
++settings get</string>
++    <string name="dlg_shell_whitelist_title">Edit whitelist</string>
++    <string name="dlg_shell_whitelist_desc">One Java regex per line; lines starting with # are ignored. Matching commands run without confirmation.</string>
++    <string name="set_shell_test">Check root</string>
++    <string name="set_shell_test_summary">The first check pops up the Magisk prompt; tap allow.</string>
++    <string name="shell_status_testing">Checking root…</string>
++    <string name="shell_status_ok">root available (su works)</string>
++    <string name="shell_status_fail">No root; commands run with normal app privileges</string>
++    <string name="set_shell_enabled_toast">AI system commands enabled; re-enter the chat for the tool to appear</string>
++    <string name="set_shell_high_toast">Dangerous commands released, make sure you accept the risk</string>
+ </resources>
+--- /dev/null
++++ b/app/src/com/oac/nazhiyazi/op/ShellRisk.java
+@@ -0,0 +1,195 @@
++package com.oac.nazhiyazi.op;
++
++import java.util.Arrays;
++import java.util.HashSet;
++import java.util.Locale;
++import java.util.regex.Pattern;
++
++/**
++ * 命令风险分级（兼容 Android 2.3 / Java 6 语法：不用 lambda、不用 String.join）
++ *
++ * SAFE   只读或无害命令，直接执行
++ * MEDIUM 会修改系统状态、杀进程、写文件，需要用户在对话框确认
++ * HIGH   可能导致无法开机 / 丢数据 / 破坏 root，必须在设置页显式放行
++ *
++ * 分级策略：白名单优先（未知命令一律落到 MEDIUM，宁严勿松）。
++ */
++public final class ShellRisk {
++
++    public static final int SAFE = 0;
++    public static final int MEDIUM = 1;
++    public static final int HIGH = 2;
++
++    private ShellRisk() {}
++
++    public static String label(int risk) {
++        if (risk == HIGH) return "高危";
++        if (risk == MEDIUM) return "中危";
++        return "一般";
++    }
++
++    /** 高危：毁机、改分区、掉权限、清数据 */
++    private static final Pattern HIGH_PAT = Pattern.compile(
++        "(^|[\\s;&|()`])(reboot|shutdown|poweroff|halt|fastboot|flash_image|simg2img|insmod|rmmod|setenforce\\s+0)(\\s|$)"
++        + "|(^|[\\s;&|()`])(dd|mkfs|mkfs\\.[a-z0-9]+|mke2fs|fdisk|sfdisk|sgdisk|parted|e2fsck|wipe)(\\s|$)"
++        + "|(^|[\\s;&|()`])rm\\s+(-[a-z]*\\s+)*-[a-z]*[rf][a-z]*"
++        + "|\\bmount\\b[^\\n]*\\b(remount|--rw|,rw)\\b"
++        + "|\\bpm\\s+(uninstall|disable|hide|clear|block|suspend)\\b"
++        + "|\\bsetprop\\s+persist\\."
++        + "|>\\s*/dev/block"
++        + "|>\\s*/(system|vendor|boot|persist|firmware)"
++        + "|\\b(cp|mv|ln|chmod|chown|tee|install|touch|mkdir)\\b[^\\n]*\\s/(system|vendor|boot|persist|firmware|data/adb)\\b"
++    );
++
++    /** 中危：改配置、改文件、杀进程、装权限 */
++    private static final Pattern MEDIUM_PAT = Pattern.compile(
++        "\\bsetprop\\b"
++        + "|\\bsettings\\s+(put|delete)\\b"
++        + "|\\bappops\\s+(set|reset)\\b"
++        + "|\\b(kill|killall|pkill|renice)\\b"
++        + "|\\bam\\s+(force-stop|start|startservice|broadcast|kill|set-)\\b"
++        + "|\\bsvc\\s+[a-z]+\\s+(enable|disable)\\b"
++        + "|(^|[\\s;&|(])(stop|start)\\s*$"
++        + "|\\bmount\\b"
++        + "|\\b(chmod|chown|mkdir|rmdir|touch|cp|mv|ln|rm|tee|install|truncate)\\b"
++        + "|\\bsed\\b[^\\n]*-[a-z]*i"
++        + "|\\bpm\\s+(grant|revoke|enable)\\b"
++        + "|\\blogcat\\b[^\\n]*-[a-z]*c[a-z]*"
++        + "|\\binput\\b"
++        + "|\\bsendevent\\b"
++        + "|(^|[\\s;&|(])su(\\s|$)"
++        + "|\\bdumpsys\\b[^\\n]*(battery\\s+set|reset|unplug|simulate)"
++        + "|\\bsqlite3\\b"
++        + "|\\bsh\\s+-c"
++    );
++
++    /** 只读命令白名单（首 token） */
++    private static final HashSet<String> SAFE_CMDS = new HashSet<String>(Arrays.asList(new String[]{
++        "getprop", "getenforce", "id", "whoami", "uname", "date", "uptime",
++        "ps", "top", "free", "df", "du", "ls", "cat", "head", "tail", "wc",
++        "grep", "find", "stat", "file", "readlink", "realpath", "which", "type",
++        "pidof", "pgrep", "dumpsys", "logcat", "lsmod", "vmstat", "printenv",
++        "env", "ifconfig", "netstat", "sleep", "echo", "printf", "true", "false",
++        "wm", "settings", "appops", "pm", "cmd", "[", "test"
++    }));
++
++    /** shell 控制关键字：不单独执行，递归检查其后的剩余内容 */
++    private static final HashSet<String> KEYWORDS = new HashSet<String>(Arrays.asList(new String[]{
++        "for", "do", "done", "while", "until", "if", "then", "else", "elif", "fi", "{", "}", "("
++    }));
++
++    /** 命令分隔符：| ; && || 与换行 */
++    private static final Pattern SPLIT_PAT = Pattern.compile("\\|\\||&&|[|;\\n]");
++
++    /**
++     * 判定风险等级。
++     */
++    public static int classify(String cmd) {
++        if (cmd == null) return MEDIUM;
++        String raw = cmd.trim();
++        if (raw.length() == 0) return MEDIUM;
++        String s = raw.toLowerCase(Locale.US);
++
++        if (HIGH_PAT.matcher(s).find()) return HIGH;
++        if (MEDIUM_PAT.matcher(s).find()) return MEDIUM;
++        if (s.indexOf('>') >= 0) return MEDIUM;   // 任何输出重定向都可能写文件
++
++        String[] segs = SPLIT_PAT.split(s);
++        for (int i = 0; i < segs.length; i++) {
++            if (!isSegmentSafe(segs[i])) return MEDIUM;
++        }
++        return SAFE;
++    }
++
++    /** 单段命令是否只读安全 */
++    private static boolean isSegmentSafe(String seg) {
++        String s = seg == null ? "" : seg.trim();
++        if (s.length() == 0) return true;
++
++        // 跳过前置的环境变量赋值：FOO=1 cmd ...
++        for (int guard = 0; guard < 4; guard++) {
++            int sp = s.indexOf(' ');
++            if (sp <= 0) break;
++            String head = s.substring(0, sp);
++            if (head.indexOf('=') > 0) { s = s.substring(sp + 1).trim(); continue; }
++            break;
++        }
++        if (s.length() == 0) return true;
++
++        int sp = s.indexOf(' ');
++        String name = sp < 0 ? s : s.substring(0, sp);
++        String rest = sp < 0 ? "" : s.substring(sp + 1).trim();
++        // 绝对路径调用：取 basename
++        if (name.length() > 0 && name.charAt(0) == '/') {
++            int slash = name.lastIndexOf('/');
++            name = name.substring(slash + 1);
++        }
++        name = name.replace("(\"", "").replace("`", "").replace(";", "");
++
++        // 命令替换 $(...) 与反引号可能藏任意命令，一律降级
++        if (s.indexOf("$(") >= 0 || s.indexOf('`') >= 0) return false;
++
++        // shell 关键字处理
++        if (KEYWORDS.contains(name)) {
++            // for / while / until 后面是变量列表与集合，不是命令本身
++            if ("for".equals(name) || "while".equals(name) || "until".equals(name)) return true;
++            // 纯结构关键字，无命令内容
++            if ("done".equals(name) || "fi".equals(name)
++                    || "}".equals(name) || "{".equals(name) || "(".equals(name)) return true;
++            // do / then / else / elif / if：递归检查其后的真实命令
++            return isSegmentSafe(rest);
++        }
++
++        if (!SAFE_CMDS.contains(name)) return false;
++
++        if ("logcat".equals(name)) {
++            return rest.indexOf("-d") >= 0 || rest.indexOf("-t") >= 0;
++        }
++        if ("settings".equals(name)) {
++            return rest.startsWith("get") || rest.startsWith("list");
++        }
++        if ("appops".equals(name)) {
++            return rest.startsWith("get");
++        }
++        if ("pm".equals(name)) {
++            return rest.startsWith("list") || rest.startsWith("path")
++                || rest.startsWith("dump") || rest.startsWith("get-");
++        }
++        if ("cmd".equals(name)) {
++            return rest.indexOf(" list") >= 0 || rest.startsWith("list")
++                || rest.indexOf(" get") >= 0 || rest.startsWith("get")
++                || rest.indexOf("help") >= 0;
++        }
++        if ("wm".equals(name)) {
++            return rest.equals("size") || rest.equals("density");
++        }
++        if ("date".equals(name)) {
++            return rest.indexOf("-s") < 0 && rest.indexOf("set") < 0;
++        }
++        if ("find".equals(name)) {
++            return rest.indexOf("-delete") < 0 && rest.indexOf("-exec") < 0;
++        }
++        return true;
++    }
++
++    /**
++     * 用户白名单：每行一个正则（或纯文本），命中则视为安全。
++     */
++    public static boolean isWhitelisted(String cmd, String whitelistText) {
++        if (cmd == null || whitelistText == null) return false;
++        String text = whitelistText.trim();
++        if (text.length() == 0) return false;
++        String lower = cmd.toLowerCase(Locale.US);
++        String[] lines = text.split("\\n");
++        for (int i = 0; i < lines.length; i++) {
++            String rule = lines[i] == null ? "" : lines[i].trim();
++            if (rule.length() == 0 || rule.startsWith("#")) continue;
++            try {
++                if (Pattern.compile(rule, Pattern.CASE_INSENSITIVE).matcher(cmd).find()) return true;
++            } catch (Throwable t) {
++                if (lower.indexOf(rule.toLowerCase(Locale.US)) >= 0) return true;
++            }
++        }
++        return false;
++    }
++}
+--- /dev/null
++++ b/app/src/com/oac/nazhiyazi/op/ShellUtil.java
+@@ -0,0 +1,238 @@
++package com.oac.nazhiyazi.op;
++
++import android.content.Context;
++
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.InputStream;
++import java.io.OutputStreamWriter;
++import java.text.SimpleDateFormat;
++import java.util.Date;
++import java.util.Locale;
++
++/**
++ * 本地命令执行器（都是 shell 命令 + root）。
++ *
++ * 兼容性约束（Android 2.3 / API 9）：
++ *   - 不用 Process.waitFor(timeout, unit)（API 26+ 才有），自己轮询 exitValue
++ *   - 不用 try-with-resources
++ *   - stdout / stderr 必须并发读，否则缓冲区满会死锁
++ */
++public final class ShellUtil {
++
++    /** 输出上限：防止 dumpsys 类命令把 token 烧光或 OOM */
++    public static final int MAX_OUTPUT = 6000;
++    public static final int DEFAULT_TIMEOUT_MS = 25000;
++
++    /** su 候选路径，按顺序尝试 */
++    private static final String[] SU_CANDIDATES = new String[]{
++        "su", "/system/xbin/su", "/system/bin/su", "/sbin/su",
++        "/su/bin/su", "/debug_ramdisk/su", "/data/adb/ksu/bin/su"
++    };
++
++    /** null = 尚不可用；"" = 检测过不可用；其他 = 可用的 su 路径 */
++    private static volatile String sSuBin = null;
++    private static volatile boolean sProbed = false;
++
++    private ShellUtil() {}
++
++    public static class Result {
++        public int exit = -1;
++        public String output = "";
++        public boolean timeout = false;
++        public boolean rootUsed = false;
++    }
++
++    /**
++     * 探测 su 是否可用。首次会触发 Magisk 授权弹窗，因此给足 60s。
++     */
++    public static synchronized String probeSu(Context ctx) {
++        if (sProbed) {
++            return sSuBin == null ? "" : sSuBin;
++        }
++        sProbed = true;
++        for (int i = 0; i < SU_CANDIDATES.length; i++) {
++            String bin = SU_CANDIDATES[i];
++            Result r = exec(new String[]{bin, "-c", "id -u"}, 60000);
++            if (r != null && !r.timeout && r.exit == 0
++                    && r.output != null && r.output.trim().indexOf("0") >= 0) {
++                sSuBin = bin;
++                return bin;
++            }
++        }
++        sSuBin = "";
++        return "";
++    }
++
++    public static boolean hasRoot(Context ctx) {
++        String su = probeSu(ctx);
++        return su != null && su.length() > 0;
++    }
++
++    /** 清缓存，设置页“重新检测 root”用 */
++    public static synchronized void resetSuCache() {
++        sProbed = false;
++        sSuBin = null;
++    }
++
++    /**
++     * 有 su 走 su，没有就降级为普通 shell（只读命令仍可能成功）。
++     */
++    public static Result runRoot(Context ctx, String command, int timeoutMs) {
++        String su = probeSu(ctx);
++        Result r;
++        if (su != null && su.length() > 0) {
++            r = exec(new String[]{su, "-c", command}, timeoutMs);
++            r.rootUsed = true;
++        } else {
++            r = exec(new String[]{"/system/bin/sh", "-c", command}, timeoutMs);
++            r.rootUsed = false;
++        }
++        return r;
++    }
++
++    private static Result exec(String[] argv, int timeoutMs) {
++        Result r = new Result();
++        StringBuilder buf = new StringBuilder();
++        Process p;
++        try {
++            p = Runtime.getRuntime().exec(argv);
++        } catch (Throwable t) {
++            r.output = "(启动进程失败: " + t.getClass().getSimpleName()
++                + (t.getMessage() == null ? "" : (": " + t.getMessage())) + ")";
++            r.exit = -1;
++            return r;
++        }
++
++        Pump out = new Pump(p.getInputStream(), buf);
++        Pump err = new Pump(p.getErrorStream(), buf);
++        out.start();
++        err.start();
++
++        int wait = timeoutMs <= 0 ? DEFAULT_TIMEOUT_MS : timeoutMs;
++        long deadline = System.currentTimeMillis() + wait;
++        boolean done = false;
++        while (System.currentTimeMillis() < deadline) {
++            try {
++                p.exitValue();
++                done = true;
++                break;
++            } catch (IllegalThreadStateException e) {
++                try {
++                    Thread.sleep(50);
++                } catch (InterruptedException ie) {
++                    break;
++                }
++            } catch (Throwable t) {
++                break;
++            }
++        }
++
++        if (!done) {
++            r.timeout = true;
++            try { p.destroy(); } catch (Throwable t) {}
++        }
++
++        try { out.join(1500); } catch (Throwable t) {}
++        try { err.join(1500); } catch (Throwable t) {}
++
++        if (!r.timeout) {
++            try {
++                r.exit = p.exitValue();
++            } catch (Throwable t) {
++                r.exit = -1;
++            }
++        }
++
++        String text;
++        synchronized (buf) {
++            text = buf.toString();
++        }
++        r.output = truncate(text);
++        return r;
++    }
++
++    /** 并发读取单条流，超过上限后只计数不追加 */
++    private static class Pump extends Thread {
++        private final InputStream mIn;
++        private final StringBuilder mBuf;
++        private final byte[] mChunk = new byte[4096];
++
++        Pump(InputStream in, StringBuilder buf) {
++            mIn = in;
++            mBuf = buf;
++            setDaemon(true);
++        }
++
++        public void run() {
++            try {
++                int n;
++                while ((n = mIn.read(mChunk)) > 0) {
++                    synchronized (mBuf) {
++                        if (mBuf.length() >= MAX_OUTPUT * 3) continue;
++                        String s;
++                        try {
++                            s = new String(mChunk, 0, n, "UTF-8");
++                        } catch (Throwable t) {
++                            s = new String(mChunk, 0, n);
++                        }
++                        mBuf.append(s);
++                    }
++                }
++            } catch (Throwable t) {
++                // ignore
++            } finally {
++                try { mIn.close(); } catch (Throwable t) {}
++            }
++        }
++    }
++
++    private static String truncate(String s) {
++        if (s == null) return "";
++        int len = s.length();
++        if (len <= MAX_OUTPUT) return s;
++        return s.substring(0, MAX_OUTPUT) + "\n…(输出已截断，原始 " + len + " 字符)";
++    }
++
++    /**
++     * 审计日志：每条命令都落盘，出事能回溯。
++     */
++    public static void audit(Context ctx, int risk, String cmd, Result r, long costMs) {
++        if (ctx == null || r == null) return;
++        FileOutputStream fos = null;
++        try {
++            File dir = null;
++            try { dir = ctx.getExternalFilesDir(null); } catch (Throwable t) {}
++            if (dir == null) dir = ctx.getFilesDir();
++            if (dir == null) return;
++            File f = new File(dir, "shell-audit.log");
++            if (f.exists() && f.length() > 512 * 1024) {
++                f.delete();
++            }
++            SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US);
++            String head = r.output == null ? "" : r.output;
++            if (head.length() > 300) head = head.substring(0, 300);
++            head = head.replace("\n", " ⏎ ");
++            String line = fmt.format(new Date())
++                + " risk=" + ShellRisk.label(risk)
++                + " root=" + (r.rootUsed ? "1" : "0")
++                + " exit=" + r.exit
++                + " timeout=" + (r.timeout ? "1" : "0")
++                + " cost=" + costMs + "ms\n"
++                + "CMD: " + cmd + "\n"
++                + "OUT: " + head + "\n----\n";
++            fos = new FileOutputStream(f, true);
++            OutputStreamWriter w = new OutputStreamWriter(fos, "UTF-8");
++            w.write(line);
++            w.flush();
++            w.close();
++            fos = null;
++        } catch (Throwable t) {
++            // 日志失败不影响主流程
++        } finally {
++            if (fos != null) {
++                try { fos.close(); } catch (Throwable t) {}
++            }
++        }
++    }
++}
+--- /dev/null
++++ b/app/src/com/oac/nazhiyazi/op/ShellGate.java
+@@ -0,0 +1,170 @@
++package com.oac.nazhiyazi.op;
++
++import android.app.Activity;
++import android.app.AlertDialog;
++import android.content.Context;
++import android.content.DialogInterface;
++import android.os.Handler;
++import android.os.Looper;
++
++import java.lang.ref.WeakReference;
++import java.util.concurrent.CountDownLatch;
++import java.util.concurrent.TimeUnit;
++
++/**
++ * 命令执行闸门：分级 → 放行判定 → 用户确认 → 执行 → 审计。
++ *
++ * 这是 AI 工具 run_shell 的唯一入口。AI 无法绕过此处的限制：
++ *   - 中危：弹窗等待用户点击，超时视为拒绝
++ *   - 高危：设置页未放行则直接拒执行，即使放行也仍会弹窗二次确认
++ */
++public final class ShellGate {
++
++    /** 确认弹窗的等待上限，超时视作拒绝 */
++    private static final int CONFIRM_TIMEOUT_MS = 120000;
++
++    /** 命令最大长度，防止超长命令注入 */
++    private static final int MAX_CMD_LEN = 2000;
++
++    private static volatile WeakReference<Activity> sAct = new WeakReference<Activity>(null);
++
++    private ShellGate() {}
++
++    /** MainActivity 在前台时注册，用于弹确认框 */
++    public static void attach(Activity a) {
++        sAct = new WeakReference<Activity>(a);
++    }
++
++    public static void detach(Activity a) {
++        Activity cur = sAct.get();
++        if (cur == null || cur == a) {
++            sAct = new WeakReference<Activity>(null);
++        }
++    }
++
++    /**
++     * 执行一条命令，返回给模型看的文本结果。此方法会阻塞（在 AI 请求后台线程调用）。
++     */
++    public static String run(String command) {
++        Context ctx = OACApplication.getContext();
++        if (ctx == null) return "(shell error: 应用上下文未初始化)";
++
++        String cmd = command == null ? "" : command.trim();
++        if (cmd.length() == 0) return "(shell error: 命令为空)";
++        if (cmd.length() > MAX_CMD_LEN) {
++            return "(shell error: 命令过长，上限 " + MAX_CMD_LEN + " 字符)";
++        }
++
++        SettingsManager sm = SettingsManager.get(ctx);
++        int risk = ShellRisk.classify(cmd);
++        boolean whitelisted = false;
++
++        if (risk != ShellRisk.SAFE && ShellRisk.isWhitelisted(cmd, sm.getShellWhitelist())) {
++            whitelisted = true;
++            risk = ShellRisk.SAFE;
++        }
++
++        if (risk == ShellRisk.HIGH && !sm.isShellHighEnabled()) {
++            return "(refused: 该命令被判定为【高危】，当前未在设置中放行，已阻止执行。\n"
++                + "请在「设置 → AI 系统命令 → 放行高危命令」中开启，或把该命令加入白名单后重试。\n"
++                + "如果只是想查看信息，请改用只读命令：getprop / dumpsys / cat /proc/... / ps / df。)";
++        }
++
++        if (risk != ShellRisk.SAFE && !confirm(ctx, cmd, risk)) {
++            return "(cancelled: 用户拒绝或未在 " + (CONFIRM_TIMEOUT_MS / 1000)
++                + " 秒内确认，命令未执行。不要重复尝试同一条命令，请向用户说明原因并等待指示。)";
++        }
++
++        int timeout = risk == ShellRisk.HIGH ? 30000 : ShellUtil.DEFAULT_TIMEOUT_MS;
++        long t0 = System.currentTimeMillis();
++        ShellUtil.Result r = ShellUtil.runRoot(ctx, cmd, timeout);
++        long cost = System.currentTimeMillis() - t0;
++        ShellUtil.audit(ctx, risk, cmd, r, cost);
++
++        StringBuilder sb = new StringBuilder();
++        sb.append("[risk=").append(ShellRisk.label(risk));
++        if (whitelisted) sb.append("/白名单");
++        sb.append(" root=").append(r.rootUsed ? "是" : "否");
++        sb.append(" exit=").append(r.exit);
++        sb.append(" cost=").append(cost).append("ms");
++        if (r.timeout) sb.append(" TIMEOUT(已强杀)");
++        sb.append("]\n");
++        if (r.output == null || r.output.length() == 0) {
++            sb.append("(无输出)");
++        } else {
++            sb.append(r.output);
++        }
++        return sb.toString();
++    }
++
++    /**
++     * 阻塞式确认：主线程弹窗，后台线程等待结果。
++     */
++    private static boolean confirm(final Context ctx, final String cmd, final int risk) {
++        final Activity act = sAct.get();
++        if (act == null) return false;   // 拿不到界面就不执行，宁可拒绝
++
++        final CountDownLatch latch = new CountDownLatch(1);
++        final boolean[] result = new boolean[]{false};
++        final AlertDialog[] holder = new AlertDialog[1];
++
++        Runnable show = new Runnable() {
++            public void run() {
++                try {
++                    final Handler h = new Handler(Looper.getMainLooper());
++                    String title = risk == ShellRisk.HIGH
++                        ? "高危命令确认（可能损坏设备）" : "命令执行确认";
++                    String prefix = risk == ShellRisk.HIGH
++                        ? "AI 请求执行以下高危命令，可能导致无法开机、数据丢失或失去 root：\n\n"
++                        : "AI 请求执行以下命令来读取/修改设备状态：\n\n";
++
++                    AlertDialog.Builder b = new AlertDialog.Builder(act);
++                    b.setTitle(title);
++                    b.setMessage(prefix + cmd);
++                    b.setCancelable(false);
++                    b.setPositiveButton(risk == ShellRisk.HIGH ? "已了解风险，执行" : "允许",
++                        new DialogInterface.OnClickListener() {
++                            public void onClick(DialogInterface d, int which) {
++                                result[0] = true;
++                                latch.countDown();
++                            }
++                        });
++                    b.setNegativeButton("拒绝",
++                        new DialogInterface.OnClickListener() {
++                            public void onClick(DialogInterface d, int which) {
++                                result[0] = false;
++                                latch.countDown();
++                            }
++                        });
++
++                    holder[0] = b.create();
++                    holder[0].show();
++
++                    h.postDelayed(new Runnable() {
++                        public void run() {
++                            try {
++                                if (holder[0] != null && holder[0].isShowing()) holder[0].dismiss();
++                            } catch (Throwable t) {}
++                            latch.countDown();
++                        }
++                    }, CONFIRM_TIMEOUT_MS);
++                } catch (Throwable t) {
++                    latch.countDown();
++                }
++            }
++        };
++
++        try {
++            act.runOnUiThread(show);
++        } catch (Throwable t) {
++            return false;
++        }
++
++        try {
++            if (!latch.await(CONFIRM_TIMEOUT_MS + 5000, TimeUnit.MILLISECONDS)) return false;
++        } catch (Throwable t) {
++            return false;
++        }
++        return result[0];
++    }
++}
+--- /dev/null
++++ b/app/src/com/oac/nazhiyazi/op/ShellManual.java
+@@ -0,0 +1,62 @@
++package com.oac.nazhiyazi.op;
++
++import android.content.Context;
++
++/**
++ * 设备运维手册：仅当 run_shell 开启时追加到 system prompt。
++ *
++ * 目标：让模型一上手就知道该看哪些节点，避免瞎试；同时把红线写死。
++ * 内容按 MTK（MT8167B）+ Android 7.0 + Magisk 实测过的路径编写。
++ */
++public final class ShellManual {
++
++    private ShellManual() {}
++
++    public static final String TEXT =
++        "【本机】MTK MT8167B（4x Cortex-A35）\uff0cAndroid 7.0（API 24）\uff0c内核 4.4.22 aarch64\uff0c"
++        + "SELinux Enforcing\uff0cMagisk su 可用。默认只做只读探测\uff1b写操作先说清目的\u3001给回滚方案\u3001等用户确认。\n"
++        + "\n【1. 整体状态】\n"
++        + "cat /proc/meminfo | head -5\uff1bfree\uff1bcat /proc/loadavg\uff1btop -n 1 -m 10\n"
++        + "dumpsys activity processes | head -60\uff08进程优先级与常驻）\n"
++        + "dumpsys power | grep -i wake\uff1bdumpsys battery\uff08只看，不要 set）\n"
++        + "cat /proc/wakeup_sources\uff1b若不存在用 cat /sys/kernel/debug/wakeup_sources\n"
++        + "\n【2. CPU 与调度（MTK）】\n"
++        + "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor\n"
++        + "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors\n"
++        + "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_frequencies\n"
++        + "cat /sys/devices/system/cpu/online\n"
++        + "for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq; do echo $f; cat $f; done\n"
++        + "\n【3. 温度与热管理（MTK 用 thermal_zone，temp 单位为千分之一度）】\n"
++        + "for z in /sys/class/thermal/thermal_zone*; do echo $z; cat $z/type; cat $z/temp; done\n"
++        + "for c in /sys/class/thermal/cooling_device*; do echo $c; cat $c/type; cat $c/cur_state; done\n"
++        + "\n【4. 存储与 I/O】\n"
++        + "df -h\uff1bcat /sys/block/mmcblk0/queue/scheduler\n"
++        + "cat /proc/sys/vm/swappiness\uff1bcat /proc/sys/vm/dirty_ratio\uff1bcat /proc/pressure/cpu\n"
++        + "\n【5. 功耗与待机】\n"
++        + "dumpsys deviceidle | head -30\uff1bdumpsys wifi | head -40\n"
++        + "settings get global wifi_sleep_policy\uff1bdumpsys telephony.registry | head -30\n"
++        + "\n【6. 应用侧】\n"
++        + "pm list packages -3\uff08第三方包）\uff1bdumpsys package <pkg> | grep -i -A2 enabled\n"
++        + "cmd appops get <pkg>\n"
++        + "\n【7. 红线（不要做）】\n"
++        + "不改 /system /vendor /boot /persist\uff1b不 reboot\uff1b不 pm uninstall/disable 系统包\uff1b"
++        + "不 setprop persist.*\uff1b不动 thermal_zone \u3001cooling_device \u3001原厂热配置\uff1b"
++        + "不一次性改多个参数。\n"
++        + "\n【8. 改动纪律】\n"
++        + "每次只改一个节点\uff1b改前先 cat 原值并记录\uff1b同时给出恢复命令；写失败不要换路径硬凑，"
++        + "先告诉用户你尝试了什么、失败在哪。\n";
++
++    /**
++     * 仅在 shell 工具开启时返回手册文本，否则返回 null。
++     */
++    public static String systemSuffix() {
++        try {
++            Context ctx = OACApplication.getContext();
++            if (ctx == null) return null;
++            if (!SettingsManager.get(ctx).isShellEnabled()) return null;
++        } catch (Throwable t) {
++            return null;
++        }
++        return TEXT;
++    }
++}
+--- /dev/null
++++ b/.github/workflows/build.yml
+@@ -0,0 +1,61 @@
++name: Build APK
++
++on:
++  push:
++    branches: [ main ]
++  workflow_dispatch:
++
++jobs:
++  build:
++    runs-on: ubuntu-22.04
++
++    steps:
++      - name: Checkout
++        uses: actions/checkout@v4
++
++      - name: Set up JDK 8
++        uses: actions/setup-java@v4
++        with:
++          distribution: temurin
++          java-version: '8'
++
++      - name: Cache Android SDK
++        uses: actions/cache@v4
++        with:
++          path: ~/android-sdk
++          key: android-sdk-30.0.3-android-28-v1
++
++      - name: Install Android SDK (build-tools 30.0.3 + platform 28)
++        run: |
++          set -e
++          SDK=$HOME/android-sdk
++          if [ ! -x "$SDK/build-tools/30.0.3/aapt" ]; then
++            mkdir -p "$SDK/cmdline-tools"
++            cd "$SDK"
++            curl -sSLo cmdline.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
++            unzip -q cmdline.zip -d "$SDK/cmdline-tools"
++            rm -f cmdline.zip
++            mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
++            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses > /dev/null || true
++            "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" "platform-tools" "build-tools;30.0.3" "platforms;android-28"
++          fi
++          echo "sdk.dir=$SDK" > app/local.properties
++
++      - name: Build unsigned-ish APK via legacy ant-layout script
++        run: |
++          chmod +x app/build.sh
++          bash app/build.sh
++
++      - name: Rename artifact
++        run: |
++          mkdir -p out
++          SHORT=$(echo "$GITHUB_SHA" | cut -c1-7)
++          cp app/bin/OAC_1.4.apk "out/OAC-root-shell-$SHORT.apk"
++          ls -lh out
++
++      - name: Upload APK
++        uses: actions/upload-artifact@v4
++        with:
++          name: OAC-root-shell-apk
++          path: out/*.apk
++          if-no-files-found: error

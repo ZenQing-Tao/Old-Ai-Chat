@@ -252,7 +252,7 @@ public class AIRequest {
         // Tool Calls 循环：支持多轮搜索/抓取
         StringBuilder toolHistory = new StringBuilder();
         int toolRounds = 0;
-        final int MAX_TOOL_ROUNDS = 8;
+        final int MAX_TOOL_ROUNDS = 16;
         while (!mCancelled && toolCallId != null && toolCallName != null && toolRounds < MAX_TOOL_ROUNDS) {
             toolRounds++;
             String toolArgs = toolCallArgsBuf.toString();
@@ -273,7 +273,7 @@ public class AIRequest {
             // 显示当前操作状态
             synchronized (mContentBuffer) {
                 mContentBuffer.append("[正在")
-                    .append(toolRounds == 1 ? "联网搜索" : "打开网页")
+                    .append(toolLabel(toolCallName))
                     .append("…]");
             }
             scheduleFlush();
@@ -368,8 +368,27 @@ public class AIRequest {
             java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat(
                     "yyyy-MM-dd HH:mm:ss EEEE", java.util.Locale.getDefault());
             return sdf.format(new java.util.Date());
+        } else if ("run_shell".equals(toolName)) {
+            String command = "";
+            try {
+                org.json.JSONObject json = new org.json.JSONObject(
+                        (argsJson == null || argsJson.length() == 0) ? "{}" : argsJson);
+                command = json.optString("command", "");
+            } catch (Exception e) {
+                return "(shell error: 参数解析失败 " + e.getMessage() + ")";
+            }
+            return ShellGate.run(command);
         }
         return "(unknown tool: " + toolName + ")";
+    }
+
+    /** 工具执行期间显示给用户的状态文案 */
+    private static String toolLabel(String toolName) {
+        if ("run_shell".equals(toolName)) return "执行命令";
+        if ("fetch_page".equals(toolName)) return "打开网页";
+        if ("web_search".equals(toolName)) return "联网搜索";
+        if ("get_current_date".equals(toolName)) return "读取时间";
+        return "处理";
     }
 
     /** 读取错误响应体（复用） */
@@ -402,6 +421,13 @@ public class AIRequest {
         if (model.systemPrompt != null && model.systemPrompt.length() > 0) {
             sb.append("{\"role\":").append(jsonStr("system"))
               .append(",\"content\":").append(jsonStr(model.systemPrompt)).append("}");
+            first = false;
+        }
+        String manual = ShellManual.systemSuffix();
+        if (manual != null) {
+            if (!first) sb.append(",");
+            sb.append("{\"role\":").append(jsonStr("system"))
+              .append(",\"content\":").append(jsonStr(manual)).append("}");
             first = false;
         }
         if (history != null) {

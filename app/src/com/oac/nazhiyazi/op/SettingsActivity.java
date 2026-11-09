@@ -47,6 +47,9 @@ public class SettingsActivity extends Activity {
     private TextView mTvLanguageValue;
     private View mRowNetMode;
     private TextView mTvNetModeValue;
+    private CheckBox mCbShell;
+    private CheckBox mCbShellHigh;
+    private TextView mTvShellWhitelistValue;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -71,6 +74,9 @@ public class SettingsActivity extends Activity {
             mTvLanguageValue = (TextView) findViewById(R.id.tv_language_value);
             mRowNetMode = findViewById(R.id.row_net_mode);
             mTvNetModeValue = (TextView) findViewById(R.id.tv_net_mode_value);
+            mCbShell = (CheckBox) findViewById(R.id.cb_shell_enabled);
+            mCbShellHigh = (CheckBox) findViewById(R.id.cb_shell_high);
+            mTvShellWhitelistValue = (TextView) findViewById(R.id.tv_shell_whitelist_value);
 
             if (mBtnAddModelInline != null) {
                 mBtnAddModelInline.setOnClickListener(new View.OnClickListener() {
@@ -148,6 +154,55 @@ public class SettingsActivity extends Activity {
                 });
             }
 
+            // ===== AI 系统命令（root shell） =====
+            Button btnShellWhitelist = (Button) findViewById(R.id.btn_shell_whitelist);
+            Button btnShellTest = (Button) findViewById(R.id.btn_shell_test);
+            final TextView tvShellStatus = (TextView) findViewById(R.id.tv_shell_status);
+
+            if (mCbShell != null) {
+                mCbShell.setChecked(mSettings.isShellEnabled());
+                mCbShell.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        mSettings.setShellEnabled(mCbShell.isChecked());
+                        updateShellUi();
+                        if (mCbShell.isChecked()) {
+                            toast(getString(R.string.set_shell_enabled_toast));
+                        }
+                    }
+                });
+            }
+
+            if (mCbShellHigh != null) {
+                mCbShellHigh.setChecked(mSettings.isShellHighEnabled());
+                mCbShellHigh.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        mSettings.setShellHighEnabled(mCbShellHigh.isChecked());
+                        if (mCbShellHigh.isChecked()) {
+                            Toast.makeText(SettingsActivity.this, R.string.set_shell_high_toast,
+                                    Toast.LENGTH_LONG).show();
+                        }
+                    }
+                });
+            }
+
+            if (btnShellWhitelist != null) {
+                btnShellWhitelist.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        showShellWhitelistDialog();
+                    }
+                });
+            }
+
+            if (btnShellTest != null) {
+                btnShellTest.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View v) {
+                        testRoot(tvShellStatus);
+                    }
+                });
+            }
+
+            updateShellUi();
+
             refreshModelList();
         } catch (Throwable t) {
             t.printStackTrace();
@@ -163,6 +218,78 @@ public class SettingsActivity extends Activity {
         }
         if (m.length() > 100) m = m.substring(0, 100);
         return m;
+    }
+
+    /** 刷新 shell 相关控件的状态显示 */
+    private void updateShellUi() {
+        if (mTvShellWhitelistValue != null) {
+            String wl = null;
+            try { wl = mSettings.getShellWhitelist(); } catch (Throwable t) {}
+            int count = 0;
+            if (wl != null && wl.trim().length() > 0) {
+                String[] arr = wl.split("\n");
+                for (int i = 0; i < arr.length; i++) {
+                    String line = arr[i] == null ? "" : arr[i].trim();
+                    if (line.length() > 0 && !line.startsWith("#")) count++;
+                }
+            }
+            mTvShellWhitelistValue.setText(count == 0
+                    ? getString(R.string.set_shell_whitelist_none)
+                    : getString(R.string.set_shell_whitelist_count, Integer.valueOf(count)));
+        }
+        if (mCbShellHigh != null) {
+            mCbShellHigh.setEnabled(mCbShell != null && mCbShell.isChecked());
+        }
+    }
+
+    /** 编辑命令白名单 */
+    private void showShellWhitelistDialog() {
+        final EditText et = new EditText(this);
+        et.setSingleLine(false);
+        et.setMinLines(6);
+        et.setGravity(android.view.Gravity.TOP | android.view.Gravity.LEFT);
+        et.setText(mSettings.getShellWhitelist());
+        et.setHint(R.string.set_shell_whitelist_hint);
+
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle(R.string.dlg_shell_whitelist_title);
+        b.setMessage(R.string.dlg_shell_whitelist_desc);
+        b.setView(et);
+        b.setPositiveButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface d, int which) {
+                String text = et.getText() == null ? "" : et.getText().toString();
+                mSettings.setShellWhitelist(text);
+                updateShellUi();
+            }
+        });
+        b.setNegativeButton(android.R.string.cancel, null);
+        b.show();
+    }
+
+    /** 检测 su 是否可用（首次会拉起 Magisk 授权框） */
+    private void testRoot(final TextView status) {
+        if (status != null) status.setText(R.string.shell_status_testing);
+        try {
+            Toast.makeText(this, R.string.shell_status_testing, Toast.LENGTH_SHORT).show();
+        } catch (Throwable t) {}
+        new Thread(new Runnable() {
+            public void run() {
+                ShellUtil.resetSuCache();
+                final boolean ok = ShellUtil.hasRoot(SettingsActivity.this);
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        if (status != null) {
+                            status.setText(ok ? R.string.shell_status_ok : R.string.shell_status_fail);
+                        }
+                        try {
+                            Toast.makeText(SettingsActivity.this,
+                                    ok ? R.string.shell_status_ok : R.string.shell_status_fail,
+                                    Toast.LENGTH_LONG).show();
+                        } catch (Throwable t) {}
+                    }
+                });
+            }
+        }).start();
     }
 
     private void toast(String msg) {

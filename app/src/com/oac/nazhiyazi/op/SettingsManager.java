@@ -275,4 +275,37 @@ public class SettingsManager {
     public void setNetModeChosen(boolean chosen) {
         mPrefs.edit().putBoolean(KEY_NET_MODE_CHOSEN, chosen).commit();
     }
+
+    // ============ AI 系统命令（root shell） ============
+
+    private static final String KEY_SHELL_ENABLED = "shell_enabled";
+    private static final String KEY_SHELL_HIGH = "shell_high_enabled";
+    private static final String KEY_SHELL_WHITELIST = "shell_whitelist";
+
+    /** AI 是否允许调用本地 shell（默认关闭） */
+    public boolean isShellEnabled() {
+        return mPrefs.getBoolean(KEY_SHELL_ENABLED, false);
+    }
+
+    public void setShellEnabled(boolean enabled) {
+        mPrefs.edit().putBoolean(KEY_SHELL_ENABLED, enabled).commit();
+    }
+
+    /** 是否放行高危命令（默认关闭）。开启后高危命令仍会弹窗二次确认。 */
+    public boolean isShellHighEnabled() {
+        return mPrefs.getBoolean(KEY_SHELL_HIGH, false);
+    }
+
+    public void setShellHighEnabled(boolean enabled) {
+        mPrefs.edit().putBoolean(KEY_SHELL_HIGH, enabled).commit();
+    }
+
+    /** 命令白名单：每行一个正则或文本片段，命中即视为安全 */
+    public String getShellWhitelist() {
+        return mPrefs.getString(KEY_SHELL_WHITELIST, "");
+    }
+
+    public void setShellWhitelist(String text) {
+        mPrefs.edit().putString(KEY_SHELL_WHITELIST, text == null ? "" : text).commit();
+    }
 }

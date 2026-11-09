@@ -149,6 +149,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        try { ShellGate.attach(this); } catch (Throwable t) {}
 
         try {
             mSettings = SettingsManager.get(this);
@@ -1503,6 +1504,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        try { ShellGate.detach(this); } catch (Throwable t) {}
         for (PendingRequest pr : mPendingRequests.values()) {
             if (pr != null) {
                 if (pr.streamHandler != null) {

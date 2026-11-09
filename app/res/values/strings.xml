@@ -160,4 +160,26 @@ APP 更新时间:2026.8.15"</string>
     <string name="net_mode_legacy">老网络层（Android 2.1）</string>
     <string name="net_mode_title">选择网络层</string>
     <string name="net_mode_switched">已切换到 %1$s，下次请求生效</string>
+    <string name="set_shell_title">AI 系统命令（root）</string>
+    <string name="set_shell_enabled">允许 AI 执行本地命令</string>
+    <string name="set_shell_enabled_summary">开启后模型可调用 run_shell。一般命令直接执行，中危命令弹窗确认，高危命令默认拦截。</string>
+    <string name="set_shell_high">放行高危命令</string>
+    <string name="set_shell_high_summary">谨慎开启。开启后仍会弹窗二次确认，但 AI 已可能改分区、删数据、让设备无法开机。</string>
+    <string name="set_shell_whitelist">命令白名单</string>
+    <string name="set_shell_whitelist_summary">每行一条规则（支持正则），命中即视为一般命令，不再弹窗。</string>
+    <string name="set_shell_whitelist_none">未设置</string>
+    <string name="set_shell_whitelist_count">已设 %1$d 条</string>
+    <string name="set_shell_whitelist_hint">每行一条，例如：
+^getprop
+^dumpsys battery
+settings get</string>
+    <string name="dlg_shell_whitelist_title">编辑命令白名单</string>
+    <string name="dlg_shell_whitelist_desc">每行一条，支持 Java 正则；以 # 开头为注释。命中白名单的命令会被当作一般命令直接执行。</string>
+    <string name="set_shell_test">检测 root</string>
+    <string name="set_shell_test_summary">首次检测会弹出 Magisk 授权框，请点允许。</string>
+    <string name="shell_status_testing">正在检测 root…</string>
+    <string name="shell_status_ok">root 可用（su 工作正常）</string>
+    <string name="shell_status_fail">未取得 root，命令将以普通权限执行</string>
+    <string name="set_shell_enabled_toast">已开启 AI 系统命令，重新进入对话后工具生效</string>
+    <string name="set_shell_high_toast">已放行高危命令，请确认你清楚风险</string>
 </resources>
