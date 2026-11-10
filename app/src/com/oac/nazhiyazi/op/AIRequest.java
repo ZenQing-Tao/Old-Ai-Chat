@@ -56,6 +56,8 @@ public class AIRequest {
     private volatile List<ChatMessage> mHistory;
     private volatile String mUserMessage;
     private volatile List<String> mImages;
+    /** 文本化工具调用（DSML）的流式过滤器 */
+    private final DsmlToolParser.StreamFilter mDsml = new DsmlToolParser.StreamFilter();
 
     // 流式 delta 缓冲区：后台线程追加，主线程 flush runnable 读取并清空
     private final StringBuilder mContentBuffer = new StringBuilder();
@@ -143,6 +145,7 @@ public class AIRequest {
         mUserMessage = userMessage;
         mImages = images;
         mHandler.removeCallbacks(mFlushRunnable);
+        mDsml.reset();
         synchronized (mContentBuffer) { mContentBuffer.setLength(0); }
         synchronized (mReasoningBuffer) { mReasoningBuffer.setLength(0); }
         mThread = new Thread(new Runnable() {
@@ -204,45 +207,40 @@ public class AIRequest {
         BufferedReader reader = new BufferedReader(new InputStreamReader(is, "UTF-8"));
         StringBuilder fullContent = new StringBuilder();
         StringBuilder fullReasoning = new StringBuilder();
-        // Tool Calls 累积
+        // 原生 tool_calls 累积
         String toolCallId = null;
         String toolCallName = null;
         StringBuilder toolCallArgsBuf = new StringBuilder();
-        // 本轮响应的思考内容。DeepSeek 思考模式下，带 tool_calls 的 assistant 消息
-        // 必须把 reasoning_content 原样回传，否则下一次请求返回 400。
+        // 本轮思考：思考模式下带 tool_calls 的 assistant 消息必须回传 reasoning_content
         StringBuilder roundReasoning = new StringBuilder();
         String line;
+
         while (!mCancelled && (line = reader.readLine()) != null) {
             StreamDelta d = AIClient.parseStreamLine(line);
-            if (d == null) {
-                // [DONE]
-                break;
-            }
+            if (d == null) break;
             if (d.isToolCall) {
                 if (d.toolCallId != null) toolCallId = d.toolCallId;
                 if (d.toolCallName != null) toolCallName = d.toolCallName;
                 if (d.toolCallArgs != null) toolCallArgsBuf.append(d.toolCallArgs);
-                // 显示搜索状态
                 synchronized (mContentBuffer) {
                     if (mContentBuffer.length() == 0 && toolCallName != null) {
-                        mContentBuffer.append("正在联网搜索…");
+                        mContentBuffer.append("正在处理…");
                         scheduleFlush();
                     }
                 }
             }
             if (d.hasContent()) {
-                fullContent.append(d.content);
-                synchronized (mContentBuffer) {
-                    mContentBuffer.append(d.content);
+                String visible = mDsml.feed(d.content);
+                if (visible.length() > 0) {
+                    fullContent.append(visible);
+                    synchronized (mContentBuffer) { mContentBuffer.append(visible); }
+                    scheduleFlush();
                 }
-                scheduleFlush();
             }
             if (d.hasReasoning()) {
                 fullReasoning.append(d.reasoning);
                 roundReasoning.append(d.reasoning);
-                synchronized (mReasoningBuffer) {
-                    mReasoningBuffer.append(d.reasoning);
-                }
+                synchronized (mReasoningBuffer) { mReasoningBuffer.append(d.reasoning); }
                 scheduleFlush();
             }
         }
@@ -252,42 +250,69 @@ public class AIRequest {
             mHandler.removeCallbacks(mFlushRunnable);
             return;
         }
+        String tail = mDsml.flush();
+        if (tail.length() > 0) {
+            fullContent.append(tail);
+            synchronized (mContentBuffer) { mContentBuffer.append(tail); }
+            scheduleFlush();
+        }
 
-        // Tool Calls 循环：支持多轮搜索/抓取
+        // ==================== 统一工具循环 ====================
+        // 一轮可以包含多个调用（原生 tool_calls 或正文里的 DSML 文本调用）
         StringBuilder toolHistory = new StringBuilder();
         int toolRounds = 0;
         final int MAX_TOOL_ROUNDS = 16;
-        while (!mCancelled && toolCallId != null && toolCallName != null && toolRounds < MAX_TOOL_ROUNDS) {
+        java.util.List<DsmlToolParser.Call> pending = null;
+
+        while (!mCancelled && toolRounds < MAX_TOOL_ROUNDS) {
+            java.util.List<DsmlToolParser.Call> calls = new java.util.ArrayList<DsmlToolParser.Call>();
+            if (toolCallId != null && toolCallName != null) {
+                DsmlToolParser.Call c = new DsmlToolParser.Call();
+                c.name = toolCallName;
+                c.args = toolCallArgsBuf.toString();
+                calls.add(c);
+            } else if (pending != null && !pending.isEmpty()) {
+                calls.addAll(pending);
+            }
+            pending = null;
+            if (calls.isEmpty()) break;
             toolRounds++;
-            String toolArgs = toolCallArgsBuf.toString();
-            // 执行工具
-            String toolResult = executeToolCall(toolCallName, toolArgs);
-            // 累积工具历史
+
+            // 1) assistant 消息（含 tool_calls 与本轮思考）
             toolHistory.append(",{\"role\":\"assistant\"");
             if (roundReasoning.length() > 0) {
                 toolHistory.append(",\"reasoning_content\":").append(jsonStr(roundReasoning.toString()));
             }
-            toolHistory.append(",\"tool_calls\":[{")
-                .append("\"id\":").append(jsonStr(toolCallId))
-                .append(",\"type\":\"function\"")
-                .append(",\"function\":{\"name\":").append(jsonStr(toolCallName))
-                .append(",\"arguments\":").append(jsonStr(toolArgs))
-                .append("}}]}")
-                .append(",{\"role\":\"tool\",\"tool_call_id\":").append(jsonStr(toolCallId))
-                .append(",\"content\":").append(jsonStr(toolResult)).append("}");
-            // 本轮的思考已写入上方 assistant 消息，清空以便下一轮重新累积
+            toolHistory.append(",\"tool_calls\":[");
+            for (int i = 0; i < calls.size(); i++) {
+                DsmlToolParser.Call c = calls.get(i);
+                if (i > 0) toolHistory.append(",");
+                toolHistory.append("{\"id\":").append(jsonStr(callId(toolRounds, i)))
+                    .append(",\"type\":\"function\"")
+                    .append(",\"function\":{\"name\":").append(jsonStr(c.name))
+                    .append(",\"arguments\":").append(jsonStr(c.args)).append("}}");
+            }
+            toolHistory.append("]}");
             roundReasoning.setLength(0);
-            // 清空占位缓冲区，保留已累积的内容
+
+            // 2) 逐个执行并回填结果
+            for (int i = 0; i < calls.size(); i++) {
+                DsmlToolParser.Call c = calls.get(i);
+                String result = executeToolCall(c.name, c.args);
+                toolHistory.append(",{\"role\":\"tool\",\"tool_call_id\":")
+                    .append(jsonStr(callId(toolRounds, i)))
+                    .append(",\"content\":").append(jsonStr(result)).append("}");
+            }
+
+            // 3) 界面状态
             synchronized (mContentBuffer) { mContentBuffer.setLength(0); }
             synchronized (mReasoningBuffer) { mReasoningBuffer.setLength(0); }
-            // 显示当前操作状态
             synchronized (mContentBuffer) {
-                mContentBuffer.append("[正在")
-                    .append(toolLabel(toolCallName))
-                    .append("…]");
+                mContentBuffer.append("[正在").append(toolLabel(calls.get(0).name)).append("…]");
             }
             scheduleFlush();
-            // 发送 follow-up 请求（不带 tools，避免死循环）
+
+            // 4) 续问（不带 tools，避免死循环）
             String followUpBody = buildFollowUpBody(mModel, mHistory, mUserMessage, mImages,
                     toolHistory.toString(), true);
             AIClient.Connection conn2 = AIClient.connect(mModel, followUpBody);
@@ -301,35 +326,35 @@ public class AIRequest {
                         buildErrorMessage(code2, errBody, null)).sendToTarget();
                 return;
             }
-            // 重置 tool call 追踪，准备下一轮
+
+            // 5) 读取这一轮的响应
             toolCallId = null;
             toolCallName = null;
             toolCallArgsBuf.setLength(0);
-            // 流式读取
+            mDsml.reset();
+
             InputStream is2 = conn2.getInputStream();
             BufferedReader reader2 = new BufferedReader(new InputStreamReader(is2, "UTF-8"));
             while (!mCancelled && (line = reader2.readLine()) != null) {
-                StreamDelta d = AIClient.parseStreamLine(line);
-                if (d == null) break;
-                // 下一轮的 tool_calls（模型可能还想搜更多或打开链接）
-                if (d.isToolCall) {
-                    if (d.toolCallId != null) toolCallId = d.toolCallId;
-                    if (d.toolCallName != null) toolCallName = d.toolCallName;
-                    if (d.toolCallArgs != null) toolCallArgsBuf.append(d.toolCallArgs);
+                StreamDelta d2 = AIClient.parseStreamLine(line);
+                if (d2 == null) break;
+                if (d2.isToolCall) {
+                    if (d2.toolCallId != null) toolCallId = d2.toolCallId;
+                    if (d2.toolCallName != null) toolCallName = d2.toolCallName;
+                    if (d2.toolCallArgs != null) toolCallArgsBuf.append(d2.toolCallArgs);
                 }
-                if (d.hasContent()) {
-                    fullContent.append(d.content);
-                    synchronized (mContentBuffer) {
-                        mContentBuffer.append(d.content);
+                if (d2.hasContent()) {
+                    String visible = mDsml.feed(d2.content);
+                    if (visible.length() > 0) {
+                        fullContent.append(visible);
+                        synchronized (mContentBuffer) { mContentBuffer.append(visible); }
+                        scheduleFlush();
                     }
-                    scheduleFlush();
                 }
-                if (d.hasReasoning()) {
-                    fullReasoning.append(d.reasoning);
-                    roundReasoning.append(d.reasoning);
-                    synchronized (mReasoningBuffer) {
-                        mReasoningBuffer.append(d.reasoning);
-                    }
+                if (d2.hasReasoning()) {
+                    fullReasoning.append(d2.reasoning);
+                    roundReasoning.append(d2.reasoning);
+                    synchronized (mReasoningBuffer) { mReasoningBuffer.append(d2.reasoning); }
                     scheduleFlush();
                 }
             }
@@ -339,18 +364,33 @@ public class AIRequest {
                 mHandler.removeCallbacks(mFlushRunnable);
                 return;
             }
+            String tail2 = mDsml.flush();
+            if (tail2.length() > 0) {
+                fullContent.append(tail2);
+                synchronized (mContentBuffer) { mContentBuffer.append(tail2); }
+                scheduleFlush();
+            }
+
+            // 6) 下一轮：优先原生 tool_calls，其次正文里的 DSML 调用
+            if (toolCallId == null && mDsml.hasToolCalls()) {
+                pending = DsmlToolParser.parse(mDsml.dsmlText());
+            }
         }
 
-        // 兜底：Tool Calls 之后若仍无内容
+        // 兜底：用了工具但没有任何文字
         if (fullContent.length() == 0 && toolHistory.length() > 0) {
             fullContent.append("(model returned no text after using tools)");
         }
 
-        // 确保剩余缓冲立即 flush
         mHandler.removeCallbacks(mFlushRunnable);
         mFlushRunnable.run();
         mHandler.obtainMessage(MSG_COMPLETE,
                 new CompleteInfo(fullContent.toString(), fullReasoning.toString())).sendToTarget();
+    }
+
+    /** 生成稳定的 tool_call id */
+    private static String callId(int round, int index) {
+        return "call_" + round + "_" + index;
     }
 
     /** 从 Tool Calls arguments JSON 中提取 query 字段 */
@@ -537,10 +577,31 @@ public class AIRequest {
         mHandler.postDelayed(mFlushRunnable, 20);
     }
 
+    /** 去掉文本里的 DSML 标签，只保留可见文字 */
+    private static String stripDsml(String s) {
+        DsmlToolParser.StreamFilter f = new DsmlToolParser.StreamFilter();
+        return f.feed(s) + f.flush();
+    }
+
     private void readFull(AIClient.Connection conn) throws Exception {
         StreamDelta d = AIClient.readFullResponseDelta(conn);
         conn.disconnect();
         if (mCancelled) return;
+
+        // 非流式：模型也可能把工具调用放在正文里（DSML），先尝试解析成结构化调用
+        if (!d.isToolCall && d.hasContent()) {
+            java.util.List<DsmlToolParser.Call> dc = DsmlToolParser.parse(d.content);
+            if (!dc.isEmpty()) {
+                DsmlToolParser.Call c0 = dc.get(0);
+                d.isToolCall = true;
+                d.toolCallName = c0.name;
+                d.toolCallArgs = c0.args;
+                d.toolCallId = "call_1_0";
+                d.content = stripDsml(d.content);
+            } else if (d.content.indexOf("|DSML|") >= 0) {
+                d.content = stripDsml(d.content);
+            }
+        }
 
         // 非流式 tool_calls 处理：与流式类似但只有一轮
         if (d.isToolCall) {

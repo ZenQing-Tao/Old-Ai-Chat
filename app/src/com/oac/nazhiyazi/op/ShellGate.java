@@ -49,7 +49,7 @@ public final class ShellGate {
         Context ctx = OACApplication.getContext();
         if (ctx == null) return "(shell error: 应用上下文未初始化)";
 
-        String cmd = command == null ? "" : command.trim();
+        String cmd = ShellRisk.unwrapSu(command);
         if (cmd.length() == 0) return "(shell error: 命令为空)";
         if (cmd.length() > MAX_CMD_LEN) {
             return "(shell error: 命令过长，上限 " + MAX_CMD_LEN + " 字符)";

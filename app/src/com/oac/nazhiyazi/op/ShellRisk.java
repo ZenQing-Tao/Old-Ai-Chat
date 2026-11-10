@@ -82,11 +82,43 @@ public final class ShellRisk {
     private static final Pattern SPLIT_PAT = Pattern.compile("\\|\\||&&|[|;\\n]");
 
     /**
+     * 剥掉模型喜欢套的外层 su 包装。
+     *
+     * 我们的执行器本来就是用 su 跑的，命令里再套一层 su -c 只会：
+     *   1) 被分级器当成 "带 su" 的可疑命令，白白弹窗；
+     *   2) 多一层引号嵌套，容易出错。
+     */
+    public static String unwrapSu(String cmd) {
+        String s = cmd == null ? "" : cmd.trim();
+        for (int guard = 0; guard < 4; guard++) {
+            String lower = s.toLowerCase(Locale.US);
+            if (lower.startsWith("su -c ")) {
+                s = s.substring(6).trim();
+            } else if (lower.startsWith("su 0 -c ")) {
+                s = s.substring(9).trim();
+            } else if (lower.startsWith("su root -c ")) {
+                s = s.substring(12).trim();
+            } else if (lower.startsWith("su -c\t")) {
+                s = s.substring(6).trim();
+            } else {
+                break;
+            }
+            // 去掉包裹的引号：su -c "id -u"
+            if (s.length() > 1 && s.charAt(0) == '"' && s.charAt(s.length() - 1) == '"') {
+                s = s.substring(1, s.length() - 1).trim();
+            } else if (s.length() > 1 && s.charAt(0) == '\'' && s.charAt(s.length() - 1) == '\'') {
+                s = s.substring(1, s.length() - 1).trim();
+            }
+        }
+        return s;
+    }
+
+    /**
      * 判定风险等级。
      */
     public static int classify(String cmd) {
         if (cmd == null) return MEDIUM;
-        String raw = cmd.trim();
+        String raw = unwrapSu(cmd.trim());
         if (raw.length() == 0) return MEDIUM;
         String s = raw.toLowerCase(Locale.US);
 
