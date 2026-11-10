@@ -60,7 +60,9 @@
     <string name="model_picker_title">Select Model</string>
     <string name="set_about_text">"App name: Old AI Chat Open Source Release
 
-Current version: 1.6open/2.1beta
+Current version: 1.7-root.1 (versionCode 10)
+
+This build adds: AI system commands (root), with 3-tier risk gating
 
 Feedback or suggestions: QQ group 231804847
 
@@ -73,7 +75,7 @@ Note: Web search is not fully reliable and is for entertainment only.
 First project build: 2026.7.21 yes, 0721!
 Ciallo～(∠・ω&lt; )⌒★
 
-Updated: 2026.8.15"</string>
+Updated: 2026.11.10 (root extension)"</string>
     <string name="set_test">Test connection</string>
     <string name="set_testing">Testing…</string>
     <string name="set_test_ok">[OK] Test succeeded</string>

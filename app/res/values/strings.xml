@@ -67,8 +67,9 @@
     <string name="set_about">关于</string>
     <string name="model_picker_title">选择模型</string>
     <string name="set_about_text">"软件名称：Old AI Chat 开源发布版
+当前版本：1.7-root.1（versionCode 10）
 
-当前版本：1.6open/2.1beta
+本版扩展：AI 系统命令（root），命令分一般 / 中危 / 高危三档管控
 
 反馈问题或者意见：QQ群 231804847
 
@@ -81,7 +82,7 @@
 APP项目首次构建时间:2026.7.21 是的,0721！
 Ciallo～(∠・ω&lt; )⌒★
 
-APP 更新时间:2026.8.15"</string>
+APP 更新时间:2026.11.10（root 扩展版）"</string>
     <string name="set_test">测试连接</string>
     <string name="set_testing">测试中…</string>
     <string name="set_test_ok">[成功] 测试成功</string>

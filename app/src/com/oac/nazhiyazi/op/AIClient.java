@@ -204,6 +204,10 @@ public class AIClient {
     }
 
     public static Connection connect(Context ctx, ModelConfig model, String body) throws Exception {
+        // 发送前自检 + 规范化：用 org.json 解析再序列化一遍，
+        // 既能保证服务端一定解析得动（转义/控制字符问题会被修正），
+        // 又能在真的非法时报出长度与位置，并落盘请求体便于排查。
+        body = normalizeBodyOrThrow(ctx, body);
         NetRequest req = new NetRequest();
         req.url = model.apiUrl;
         req.method = "POST";
@@ -217,6 +221,50 @@ public class AIClient {
         }
         IHttpConnection conn = NetWorkerFactory.getWorker().connect(req);
         return new Connection(conn);
+    }
+
+    /**
+     * 请求体规范化 + 自检。
+     *
+     * 1) 用 org.json 解析：失败说明拼接出的 JSON 真的非法，直接抛错并带长度/位置；
+     * 2) 解析成功则用重新序列化的结果替换，抹平转义、控制字符等潜在差异；
+     * 3) 无论成功失败都把请求体写到 files/last_request.json，便于离线排查。
+     */
+    private static String normalizeBodyOrThrow(Context ctx, String body) throws Exception {
+        if (body == null) return null;
+        String err = null;
+        String normalized = body;
+        try {
+            org.json.JSONObject obj = new org.json.JSONObject(body);
+            normalized = obj.toString();
+        } catch (Throwable t) {
+            err = t.getClass().getSimpleName()
+                + (t.getMessage() == null ? "" : (": " + t.getMessage()));
+        }
+
+        try {
+            java.io.File dir = null;
+            if (ctx != null) {
+                dir = ctx.getExternalFilesDir(null);
+                if (dir == null) dir = ctx.getFilesDir();
+            }
+            if (dir != null) {
+                java.io.File f = new java.io.File(dir, "last_request.json");
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(f, false);
+                fos.write(normalized.getBytes("UTF-8"));
+                fos.close();
+            }
+        } catch (Throwable t) {
+            // 落盘失败不影响请求
+        }
+
+        if (err != null) {
+            int bytes = 0;
+            try { bytes = body.getBytes("UTF-8").length; } catch (Throwable t) {}
+            throw new IllegalStateException("请求体 JSON 非法（字符 " + body.length()
+                + " / 字节 " + bytes + "）：" + err);
+        }
+        return normalized;
     }
 
     public static String readFullResponse(Connection conn) throws Exception {
