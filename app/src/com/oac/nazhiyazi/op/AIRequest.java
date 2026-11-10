@@ -208,6 +208,9 @@ public class AIRequest {
         String toolCallId = null;
         String toolCallName = null;
         StringBuilder toolCallArgsBuf = new StringBuilder();
+        // 本轮响应的思考内容。DeepSeek 思考模式下，带 tool_calls 的 assistant 消息
+        // 必须把 reasoning_content 原样回传，否则下一次请求返回 400。
+        StringBuilder roundReasoning = new StringBuilder();
         String line;
         while (!mCancelled && (line = reader.readLine()) != null) {
             StreamDelta d = AIClient.parseStreamLine(line);
@@ -236,6 +239,7 @@ public class AIRequest {
             }
             if (d.hasReasoning()) {
                 fullReasoning.append(d.reasoning);
+                roundReasoning.append(d.reasoning);
                 synchronized (mReasoningBuffer) {
                     mReasoningBuffer.append(d.reasoning);
                 }
@@ -259,7 +263,11 @@ public class AIRequest {
             // 执行工具
             String toolResult = executeToolCall(toolCallName, toolArgs);
             // 累积工具历史
-            toolHistory.append(",{\"role\":\"assistant\",\"tool_calls\":[{")
+            toolHistory.append(",{\"role\":\"assistant\"");
+            if (roundReasoning.length() > 0) {
+                toolHistory.append(",\"reasoning_content\":").append(jsonStr(roundReasoning.toString()));
+            }
+            toolHistory.append(",\"tool_calls\":[{")
                 .append("\"id\":").append(jsonStr(toolCallId))
                 .append(",\"type\":\"function\"")
                 .append(",\"function\":{\"name\":").append(jsonStr(toolCallName))
@@ -267,6 +275,8 @@ public class AIRequest {
                 .append("}}]}")
                 .append(",{\"role\":\"tool\",\"tool_call_id\":").append(jsonStr(toolCallId))
                 .append(",\"content\":").append(jsonStr(toolResult)).append("}");
+            // 本轮的思考已写入上方 assistant 消息，清空以便下一轮重新累积
+            roundReasoning.setLength(0);
             // 清空占位缓冲区，保留已累积的内容
             synchronized (mContentBuffer) { mContentBuffer.setLength(0); }
             synchronized (mReasoningBuffer) { mReasoningBuffer.setLength(0); }
@@ -316,6 +326,7 @@ public class AIRequest {
                 }
                 if (d.hasReasoning()) {
                     fullReasoning.append(d.reasoning);
+                    roundReasoning.append(d.reasoning);
                     synchronized (mReasoningBuffer) {
                         mReasoningBuffer.append(d.reasoning);
                     }
@@ -536,7 +547,11 @@ public class AIRequest {
             String toolArgs = (d.toolCallArgs != null) ? d.toolCallArgs : "";
             String toolResult = executeToolCall(d.toolCallName, toolArgs);
             StringBuilder th = new StringBuilder();
-            th.append(",{\"role\":\"assistant\",\"tool_calls\":[{")
+            th.append(",{\"role\":\"assistant\"");
+            if (d.hasReasoning()) {
+                th.append(",\"reasoning_content\":").append(jsonStr(d.reasoning));
+            }
+            th.append(",\"tool_calls\":[{")
               .append("\"id\":").append(jsonStr(d.toolCallId))
               .append(",\"type\":\"function\"")
               .append(",\"function\":{\"name\":").append(jsonStr(d.toolCallName))
