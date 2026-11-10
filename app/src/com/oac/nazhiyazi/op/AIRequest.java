@@ -268,6 +268,7 @@ public class AIRequest {
 
         while (!mCancelled && toolRounds < MAX_TOOL_ROUNDS) {
             java.util.List<DsmlToolParser.Call> calls = new java.util.ArrayList<DsmlToolParser.Call>();
+            boolean fromDsml = false;
             if (toolCallId != null && toolCallName != null) {
                 DsmlToolParser.Call c = new DsmlToolParser.Call();
                 c.name = toolCallName;
@@ -275,6 +276,7 @@ public class AIRequest {
                 calls.add(c);
             } else if (pending != null && !pending.isEmpty()) {
                 calls.addAll(pending);
+                fromDsml = true;
             }
             pending = null;
             if (calls.isEmpty()) break;
@@ -286,34 +288,59 @@ public class AIRequest {
             }
             debugLog("round " + toolRounds + " calls=" + calls.size() + " [" + names + "]");
 
-            // 1) assistant 消息（含 tool_calls 与本轮思考）
-            toolHistory.append(",{\"role\":\"assistant\"");
-            if (roundReasoning.length() > 0) {
-                toolHistory.append(",\"reasoning_content\":").append(jsonStr(roundReasoning.toString()));
-            }
-            toolHistory.append(",\"tool_calls\":[");
-            for (int i = 0; i < calls.size(); i++) {
-                DsmlToolParser.Call c = calls.get(i);
-                if (i > 0) toolHistory.append(",");
-                toolHistory.append("{\"id\":").append(jsonStr(callId(toolRounds, i)))
-                    .append(",\"type\":\"function\"")
-                    .append(",\"function\":{\"name\":").append(jsonStr(c.name))
-                    .append(",\"arguments\":").append(jsonStr(c.args)).append("}}");
-            }
-            toolHistory.append("]}");
-            roundReasoning.setLength(0);
-
-            // 2) 逐个执行并回填结果
+            // 1) 先逐个执行，拿到结果
+            java.util.List<String> results = new java.util.ArrayList<String>();
             for (int i = 0; i < calls.size(); i++) {
                 DsmlToolParser.Call c = calls.get(i);
                 String result = executeToolCall(c.name, c.args);
-                toolHistory.append(",{\"role\":\"tool\",\"tool_call_id\":")
-                    .append(jsonStr(callId(toolRounds, i)))
-                    .append(",\"content\":").append(jsonStr(result)).append("}");
+                results.add(result);
                 appendToolSummary(toolSummary, c.name, c.args, result);
                 debugLog("  exec " + c.name + " args=" + head(c.args, 100)
                         + " resultLen=" + (result == null ? 0 : result.length()));
             }
+
+            if (fromDsml) {
+                // DSML 是文本协议：模型只认"上一条 assistant 说了什么 + 现在的结果"，
+                // 用 OpenAI 的 tool_calls/tool 结构它只读得到第一条结果。
+                // 这里把全部结果合并成一条 user 消息回传。
+                toolHistory.append(",{\"role\":\"assistant\",\"content\":")
+                    .append(jsonStr("我调用了 " + calls.size() + " 个命令。")).append("}");
+                StringBuilder rb = new StringBuilder();
+                rb.append("以下是这些命令的真实执行结果（输出过长已截断）。请基于这些真实数据回答用户，不要再重复执行已经成功的命令：\n");
+                for (int i = 0; i < calls.size(); i++) {
+                    DsmlToolParser.Call c = calls.get(i);
+                    String cmd = cmdOf(c.args);
+                    String r = results.get(i);
+                    if (r != null && r.length() > 1500) r = r.substring(0, 1500) + "…(已截断)";
+                    rb.append("\n【").append(i + 1).append("】").append(cmd).append("\n")
+                      .append(r == null ? "(无输出)" : r).append("\n");
+                }
+                toolHistory.append(",{\"role\":\"user\",\"content\":")
+                    .append(jsonStr(rb.toString())).append("}");
+            } else {
+                // 原生 tool_calls：标准 OpenAI 结构
+                toolHistory.append(",{\"role\":\"assistant\"");
+                if (roundReasoning.length() > 0) {
+                    toolHistory.append(",\"reasoning_content\":").append(jsonStr(roundReasoning.toString()));
+                }
+                toolHistory.append(",\"tool_calls\":[");
+                for (int i = 0; i < calls.size(); i++) {
+                    DsmlToolParser.Call c = calls.get(i);
+                    if (i > 0) toolHistory.append(",");
+                    toolHistory.append("{\"id\":").append(jsonStr(callId(toolRounds, i)))
+                        .append(",\"type\":\"function\"")
+                        .append(",\"function\":{\"name\":").append(jsonStr(c.name))
+                        .append(",\"arguments\":").append(jsonStr(c.args)).append("}}");
+                }
+                toolHistory.append("]}");
+                for (int i = 0; i < calls.size(); i++) {
+                    DsmlToolParser.Call c = calls.get(i);
+                    toolHistory.append(",{\"role\":\"tool\",\"tool_call_id\":")
+                        .append(jsonStr(callId(toolRounds, i)))
+                        .append(",\"content\":").append(jsonStr(results.get(i))).append("}");
+                }
+            }
+            roundReasoning.setLength(0);
 
             // 3) 界面状态
             synchronized (mContentBuffer) { mContentBuffer.setLength(0); }
@@ -443,6 +470,19 @@ public class AIRequest {
         if (s == null) return "";
         String t = s.replace("\n", " ");
         return t.length() <= n ? t : (t.substring(0, n) + "…");
+    }
+
+    /** 从工具参数里取出命令/查询文本（用于回传给模型和摘要展示） */
+    private static String cmdOf(String args) {
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(args == null ? "{}" : args);
+            String v = o.optString("command", "");
+            if (v == null || v.length() == 0) v = o.optString("query", "");
+            if (v == null || v.length() == 0) v = o.optString("url", "");
+            return v == null ? "" : v.replace("\n", " ").trim();
+        } catch (Throwable t) {
+            return args == null ? "" : args;
+        }
     }
 
     /** 把一次工具调用压缩成一行摘要，用于模型没写正文时兜底展示 */
