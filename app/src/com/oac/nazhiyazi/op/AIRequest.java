@@ -279,6 +279,12 @@ public class AIRequest {
             pending = null;
             if (calls.isEmpty()) break;
             toolRounds++;
+            StringBuilder names = new StringBuilder();
+            for (int i = 0; i < calls.size(); i++) {
+                if (i > 0) names.append(",");
+                names.append(calls.get(i).name);
+            }
+            debugLog("round " + toolRounds + " calls=" + calls.size() + " [" + names + "]");
 
             // 1) assistant 消息（含 tool_calls 与本轮思考）
             toolHistory.append(",{\"role\":\"assistant\"");
@@ -305,13 +311,16 @@ public class AIRequest {
                     .append(jsonStr(callId(toolRounds, i)))
                     .append(",\"content\":").append(jsonStr(result)).append("}");
                 appendToolSummary(toolSummary, c.name, c.args, result);
+                debugLog("  exec " + c.name + " args=" + head(c.args, 100)
+                        + " resultLen=" + (result == null ? 0 : result.length()));
             }
 
             // 3) 界面状态
             synchronized (mContentBuffer) { mContentBuffer.setLength(0); }
             synchronized (mReasoningBuffer) { mReasoningBuffer.setLength(0); }
             synchronized (mContentBuffer) {
-                mContentBuffer.append("[正在").append(toolLabel(calls.get(0).name)).append("…]");
+                mContentBuffer.append("[正在").append(toolLabel(calls.get(0).name))
+                    .append(" 第").append(toolRounds).append("轮…]");
             }
             scheduleFlush();
 
@@ -380,7 +389,14 @@ public class AIRequest {
                 pending = DsmlToolParser.parse(mDsml.dsmlText());
             }
             lastRoundHadText = fullContent.length() > lenBeforeRound;
+            debugLog("  stream done: contentLen=" + fullContent.length()
+                    + " grew=" + lastRoundHadText
+                    + " pending=" + (pending == null ? 0 : pending.size())
+                    + " dsml=" + mDsml.hasToolCalls());
         }
+
+        debugLog("loop end rounds=" + toolRounds + " contentLen=" + fullContent.length()
+                + " summaryLen=" + toolSummary.length());
 
         // 兜底：模型执行完工具却没写正文时，把实际执行结果直接展示给用户，
         // 否则界面上会什么都没有（模型只输出思考、正文为空的情况）。
@@ -394,6 +410,39 @@ public class AIRequest {
         mFlushRunnable.run();
         mHandler.obtainMessage(MSG_COMPLETE,
                 new CompleteInfo(fullContent.toString(), fullReasoning.toString())).sendToTarget();
+    }
+
+    /** 循环日志：写到 files/tool_loop.log，便于排查工具调用卡在哪一步 */
+    private void debugLog(String msg) {
+        java.io.FileOutputStream fos = null;
+        try {
+            android.content.Context ctx = OACApplication.getContext();
+            if (ctx == null) return;
+            java.io.File dir = null;
+            try { dir = ctx.getExternalFilesDir(null); } catch (Throwable t) {}
+            if (dir == null) dir = ctx.getFilesDir();
+            if (dir == null) return;
+            java.io.File f = new java.io.File(dir, "tool_loop.log");
+            if (f.exists() && f.length() > 256 * 1024) f.delete();
+            java.text.SimpleDateFormat fmt =
+                    new java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US);
+            String line = fmt.format(new java.util.Date()) + " " + msg + "\n";
+            fos = new java.io.FileOutputStream(f, true);
+            fos.write(line.getBytes("UTF-8"));
+        } catch (Throwable t) {
+            // 日志失败不影响主流程
+        } finally {
+            if (fos != null) {
+                try { fos.close(); } catch (Throwable t) {}
+            }
+        }
+    }
+
+    /** 取字符串前 n 个字符，用于日志 */
+    private static String head(String s, int n) {
+        if (s == null) return "";
+        String t = s.replace("\n", " ");
+        return t.length() <= n ? t : (t.substring(0, n) + "…");
     }
 
     /** 把一次工具调用压缩成一行摘要，用于模型没写正文时兜底展示 */

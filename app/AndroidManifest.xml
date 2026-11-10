@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.oac.nazhiyazi.op"
-    android:versionCode="11"
-    android:versionName="1.7-root.2">
+    android:versionCode="12"
+    android:versionName="1.7-root.3">
 
     <uses-sdk
         android:minSdkVersion="7"
