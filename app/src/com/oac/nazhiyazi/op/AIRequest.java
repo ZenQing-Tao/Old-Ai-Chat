@@ -265,20 +265,41 @@ public class AIRequest {
         java.util.List<DsmlToolParser.Call> pending = null;
         StringBuilder toolSummary = new StringBuilder();
         boolean lastRoundHadText = true;
+        // 逐条串行执行：模型一轮可能发多个调用，但这类模型通常只认得一条结果，
+        // 所以这里排队，一次只执行并回传一条。
+        java.util.List<DsmlToolParser.Call> queue = new java.util.ArrayList<DsmlToolParser.Call>();
+        // 已执行过的 (name|args)，用于串行模式下丢弃模型重复下发的命令
+        java.util.HashSet<String> executed = new java.util.HashSet<String>();
 
         while (!mCancelled && toolRounds < MAX_TOOL_ROUNDS) {
+            // 把模型新发出的文本化调用先塞进队列
+            if (pending != null && !pending.isEmpty()) {
+                int added = 0;
+                for (int i = 0; i < pending.size(); i++) {
+                    DsmlToolParser.Call pc = pending.get(i);
+                    String key = pc.name + "|" + (pc.args == null ? "" : pc.args.trim());
+                    if (executed.contains(key)) continue;
+                    if (isDuplicateOf(queue, key)) continue;
+                    queue.add(pc);
+                    added++;
+                }
+                debugLog("  queued " + added + " new dsml call(s), skipDup="
+                        + (pending.size() - added) + ", queue=" + queue.size());
+                pending = null;
+            }
+
             java.util.List<DsmlToolParser.Call> calls = new java.util.ArrayList<DsmlToolParser.Call>();
             boolean fromDsml = false;
-            if (toolCallId != null && toolCallName != null) {
+            if (!queue.isEmpty()) {
+                // 串行：一轮只执行一条
+                calls.add(queue.remove(0));
+                fromDsml = true;
+            } else if (toolCallId != null && toolCallName != null) {
                 DsmlToolParser.Call c = new DsmlToolParser.Call();
                 c.name = toolCallName;
                 c.args = toolCallArgsBuf.toString();
                 calls.add(c);
-            } else if (pending != null && !pending.isEmpty()) {
-                calls.addAll(pending);
-                fromDsml = true;
             }
-            pending = null;
             if (calls.isEmpty()) break;
             toolRounds++;
             StringBuilder names = new StringBuilder();
@@ -293,6 +314,7 @@ public class AIRequest {
             for (int i = 0; i < calls.size(); i++) {
                 DsmlToolParser.Call c = calls.get(i);
                 String result = executeToolCall(c.name, c.args);
+                executed.add(c.name + "|" + (c.args == null ? "" : c.args.trim()));
                 results.add(result);
                 appendToolSummary(toolSummary, c.name, c.args, result);
                 debugLog("  exec " + c.name + " args=" + head(c.args, 100)
@@ -416,6 +438,7 @@ public class AIRequest {
                 pending = DsmlToolParser.parse(mDsml.dsmlText());
             }
             lastRoundHadText = fullContent.length() > lenBeforeRound;
+            dumpRawRound(toolRounds, dsmRawOf(mDsml), fullContent.length(), lenBeforeRound);
             debugLog("  stream done: contentLen=" + fullContent.length()
                     + " grew=" + lastRoundHadText
                     + " pending=" + (pending == null ? 0 : pending.size())
@@ -470,6 +493,54 @@ public class AIRequest {
         if (s == null) return "";
         String t = s.replace("\n", " ");
         return t.length() <= n ? t : (t.substring(0, n) + "…");
+    }
+
+    /** 队列里是否已有同一条调用 */
+    private static boolean isDuplicateOf(java.util.List<DsmlToolParser.Call> queue, String key) {
+        if (queue == null || key == null) return false;
+        for (int i = 0; i < queue.size(); i++) {
+            DsmlToolParser.Call c = queue.get(i);
+            String k = c.name + "|" + (c.args == null ? "" : c.args.trim());
+            if (key.equals(k)) return true;
+        }
+        return false;
+    }
+
+    /** 取本轮收集到的 DSML 原文（截断） */
+    private static String dsmRawOf(DsmlToolParser.StreamFilter f) {
+        String s = f.dsmlText();
+        if (s == null) return "";
+        s = s.replace("\n", " ").trim();
+        return s.length() <= 1200 ? s : (s.substring(0, 1200) + "…");
+    }
+
+    /** 把本轮模型的原始文本化调用落盘，便于离线分析 */
+    private void dumpRawRound(int round, String dsmlRaw, int contentLen, int lenBefore) {
+        java.io.FileOutputStream fos = null;
+        try {
+            android.content.Context ctx = OACApplication.getContext();
+            if (ctx == null) return;
+            java.io.File dir = null;
+            try { dir = ctx.getExternalFilesDir(null); } catch (Throwable t) {}
+            if (dir == null) dir = ctx.getFilesDir();
+            if (dir == null) return;
+            java.io.File f = new java.io.File(dir, "last_response_raw.txt");
+            if (f.exists() && f.length() > 512 * 1024) f.delete();
+            java.text.SimpleDateFormat fmt =
+                    new java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US);
+            String line = fmt.format(new java.util.Date())
+                    + " [round " + round + "] contentLen=" + contentLen
+                    + " grew=" + (contentLen > lenBefore) + "\n"
+                    + "  DSML: " + (dsmlRaw.length() == 0 ? "(none)" : dsmlRaw) + "\n";
+            fos = new java.io.FileOutputStream(f, true);
+            fos.write(line.getBytes("UTF-8"));
+        } catch (Throwable t) {
+            // ignore
+        } finally {
+            if (fos != null) {
+                try { fos.close(); } catch (Throwable t) {}
+            }
+        }
     }
 
     /** 从工具参数里取出命令/查询文本（用于回传给模型和摘要展示） */
