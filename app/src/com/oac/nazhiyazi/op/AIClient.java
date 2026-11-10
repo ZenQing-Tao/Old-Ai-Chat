@@ -118,30 +118,8 @@ public class AIClient {
             sb.append(",\"stream\":true");
         }
         appendOptimizationParams(model, sb);
-        if (model.enableToolCalls) {
-            sb.append(",\"tools\":[")
-              .append("{\"type\":\"function\",\"function\":")
-              .append("{\"name\":\"web_search\",")
-              .append("\"description\":\"Search the web. YOU MUST USE THIS for current events, versions, releases, news. WRAP KEY TERMS IN QUOTES like \\\"Genshin\\\". 10 results are returned; identify 1-6 high-value URLs. After search, USE fetch_page to open each high-value URL one by one. Open a URL, check if it has complete info; if not, open the next one. Keep opening until you have enough to answer fully. NEVER answer from snippets alone.\",")
-              .append("\"parameters\":{\"type\":\"object\",\"properties\":{\"query\":")
-              .append("{\"type\":\"string\",\"description\":\"Search keywords in user's language\"}},")
-              .append("\"required\":[\"query\"],\"additionalProperties\":false}}},{\"type\":\"function\",\"function\":")
-              .append("{\"name\":\"fetch_page\",")
-              .append("\"description\":\"Open a URL and read full page content. REQUIRED after web_search. Open high-value URLs from search results one at a time. If one page lacks complete info, open the next. Only answer after finding all needed facts.\",")
-              .append("\"parameters\":{\"type\":\"object\",\"properties\":{\"url\":")
-              .append("{\"type\":\"string\",\"description\":\"The full URL to open from search results\"}},")
-              .append("\"required\":[\"url\"],\"additionalProperties\":false}}},{\"type\":\"function\",\"function\":")
-              .append("{\"name\":\"get_current_date\",")
-              .append("\"description\":\"Get current date and time from device.\",")
-              .append("\"parameters\":{\"type\":\"object\",\"properties\":{}")
-              .append(",\"additionalProperties\":false}}}");
-            if (isShellToolEnabled()) appendShellTool(sb);
-            sb.append("]");
-        } else if (isShellToolEnabled()) {
-            sb.append(",\"tools\":[");
-            appendShellTool(sb);
-            sb.append("]");
-        }
+        // tools 改用 org.json 构造：手工拼接容易出现结构/转义错误（曾导致服务端 422）
+        appendTools(sb, model.enableToolCalls, isShellToolEnabled());
         sb.append("}");
         return sb.toString();
     }
@@ -157,32 +135,105 @@ public class AIClient {
         }
     }
 
-    /**
-     * 追加 run_shell 工具（仅在设置页开启「AI 系统命令」时提供）。
-     */
-    private static void appendShellTool(StringBuilder sb) {
+    /** web_search 工具描述 */
+    private static final String DESC_WEB_SEARCH =
+        "Search the web. YOU MUST USE THIS for current events, versions, releases, news. "
+        + "WRAP KEY TERMS IN QUOTES (e.g. the plain product name). 10 results are returned; "
+        + "identify 1-6 high-value URLs. After search, USE fetch_page to open each high-value URL "
+        + "one by one. Open a URL, check if it has complete info; if not, open the next one. "
+        + "Keep opening until you have enough to answer fully. NEVER answer from snippets alone.";
+
+    /** fetch_page 工具描述 */
+    private static final String DESC_FETCH_PAGE =
+        "Open a URL and read full page content. REQUIRED after web_search. "
+        + "Open high-value URLs from search results one at a time. "
+        + "If one page lacks complete info, open the next. Only answer after finding all needed facts.";
+
+    /** run_shell 工具描述 */
+    private static final String DESC_RUN_SHELL =
+        "Run a shell command on the local Android device as root (via su). "
+        + "Use it to inspect or tune THIS device: getprop, dumpsys, cat /proc/..., ps, top, df, "
+        + "logcat -d, settings get, pm list, lsmod, cat /sys/... . "
+        + "Commands are risk-graded: read-only commands run immediately; commands that change state "
+        + "need the user to confirm a dialog; dangerous commands (reboot, rm -rf, dd, mkfs, "
+        + "pm uninstall/disable, writing to /system, setprop persist.*) are blocked unless released in settings. "
+        + "Rules: (1) Prefer read-only probes; gather facts before changing anything. "
+        + "(2) One change per command; never chain unrelated modifications. "
+        + "(3) If the result says refused or cancelled, do NOT retry; explain to the user instead. "
+        + "(4) Output is truncated, so keep commands narrow. "
+        + "(5) Explain what you change and why, and prefer reversible changes.";
+
+    private static org.json.JSONObject stringSchema(String desc) {
+        org.json.JSONObject o = new org.json.JSONObject();
         try {
-            Context ctx = OACApplication.getContext();
-            if (ctx == null) return;
-            if (!SettingsManager.get(ctx).isShellEnabled()) return;
+            o.put("type", "string");
+            o.put("description", desc);
+        } catch (Throwable t) {}
+        return o;
+    }
+
+    private static org.json.JSONObject functionTool(String name, String desc, org.json.JSONObject params) {
+        org.json.JSONObject tool = new org.json.JSONObject();
+        org.json.JSONObject fn = new org.json.JSONObject();
+        try {
+            fn.put("name", name);
+            fn.put("description", desc);
+            if (params != null) fn.put("parameters", params);
+            tool.put("type", "function");
+            tool.put("function", fn);
+        } catch (Throwable t) {}
+        return tool;
+    }
+
+    private static org.json.JSONObject objectSchema(String[] propNames, String[] propDescs, String[] required) {
+        org.json.JSONObject o = new org.json.JSONObject();
+        try {
+            o.put("type", "object");
+            org.json.JSONObject props = new org.json.JSONObject();
+            for (int k = 0; k < propNames.length; k++) {
+                props.put(propNames[k], stringSchema(propDescs[k]));
+            }
+            o.put("properties", props);
+            if (required != null && required.length > 0) {
+                org.json.JSONArray req = new org.json.JSONArray();
+                for (int k = 0; k < required.length; k++) req.put(required[k]);
+                o.put("required", req);
+            }
+            o.put("additionalProperties", false);
+        } catch (Throwable t) {}
+        return o;
+    }
+
+    /**
+     * 追加 tools 数组。全部用 org.json 对象构造，结构上不可能出现 null / 少括号 / 转义错误。
+     */
+    private static void appendTools(StringBuilder sb, boolean webTools, boolean shellTool) {
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray();
+            if (webTools) {
+                arr.put(functionTool("web_search", DESC_WEB_SEARCH,
+                        objectSchema(new String[]{"query"},
+                                new String[]{"Search keywords in user's language"},
+                                new String[]{"query"})));
+                arr.put(functionTool("fetch_page", DESC_FETCH_PAGE,
+                        objectSchema(new String[]{"url"},
+                                new String[]{"The full URL to open from search results"},
+                                new String[]{"url"})));
+                arr.put(functionTool("get_current_date", "Get current date and time from device.",
+                        objectSchema(new String[0], new String[0], null)));
+            }
+            if (shellTool) {
+                arr.put(functionTool("run_shell", DESC_RUN_SHELL,
+                        objectSchema(new String[]{"command", "purpose"},
+                                new String[]{"Full one-line shell command, executed as root",
+                                        "Short reason shown to the user in the confirm dialog"},
+                                new String[]{"command"})));
+            }
+            if (arr.length() == 0) return;
+            sb.append(",\"tools\":").append(arr.toString());
         } catch (Throwable t) {
-            return;
+            // 构造失败就不带工具，宁可没有工具也不要发非法 JSON
         }
-        sb.append(",{\"type\":\"function\",\"function\":{")
-          .append("\"name\":\"run_shell\",")
-          .append("\"description\":\"Run a shell command on the local Android device as root (via su). ")
-          .append("Use it to inspect or tune THIS device: getprop, dumpsys, cat /proc/..., ps, top, df, logcat -d, settings get, pm list, lsmod, cat /sys/... . ")
-          .append("Commands are risk-graded: read-only commands run immediately; commands that change state need the user to confirm a dialog; ")
-          .append("dangerous commands (reboot, rm -rf, dd, mkfs, pm uninstall/disable, writing to /system, setprop persist.*) are blocked unless the user released them in settings. ")
-          .append("Rules: (1) Prefer read-only probes and gather facts before changing anything. ")
-          .append("(2) One change per command; never chain unrelated modifications. ")
-          .append("(3) If the result says refused or cancelled, do NOT retry the same command; explain to the user instead. ")
-          .append("(4) Output is truncated, so keep commands narrow and avoid dumping huge buffers. ")
-          .append("(5) Explain to the user what you change and why, and prefer changes that can be undone.\",")
-          .append("\"parameters\":{\"type\":\"object\",\"properties\":{")
-          .append("\"command\":{\"type\":\"string\",\"description\":\"Full one-line shell command, executed as root\"},")
-          .append("\"purpose\":{\"type\":\"string\",\"description\":\"Short reason shown to the user in the confirm dialog\"}},")
-          .append("\"required\":[\"command\"],\"additionalProperties\":false}}}");
     }
 
     private static void appendOptimizationParams(ModelConfig model, StringBuilder sb) {
