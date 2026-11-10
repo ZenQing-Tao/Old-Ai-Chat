@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [ main, feature/root-shell ]
+    branches: [ main, 'feature/**' ]
   workflow_dispatch:
 
 jobs:
@@ -23,31 +23,54 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/android-sdk
-          key: android-sdk-30.0.3-android-28-v1
+          key: android-sdk-manual-bt3030-plat28-v2
 
-      - name: Install Android SDK (build-tools 30.0.3 + platform 28)
+      # 不使用 sdkmanager：新版 cmdline-tools 需要 JDK11+，在 JDK8 环境下会秒退
+      # （上一次 CI 失败就卡在这一步）。改为直接下载官方 zip 后重命名目录。
+      - name: Install Android SDK (direct download, no sdkmanager)
         run: |
-          set -e
-          SDK=$HOME/android-sdk
+          set -euo pipefail
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK/build-tools" "$SDK/platforms" /tmp/dl
+
           if [ ! -x "$SDK/build-tools/30.0.3/aapt" ]; then
-            mkdir -p "$SDK/cmdline-tools"
-            cd "$SDK"
-            curl -sSLo cmdline.zip https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-            unzip -q cmdline.zip -d "$SDK/cmdline-tools"
-            rm -f cmdline.zip
-            mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
-            yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses > /dev/null || true
-            "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" "platform-tools" "build-tools;30.0.3" "platforms;android-28"
+            echo "==> downloading build-tools 30.0.3"
+            curl -fsSL --retry 3 -o /tmp/dl/bt.zip \
+              https://dl.google.com/android/repository/build-tools_r30.0.3-linux.zip
+            unzip -q /tmp/dl/bt.zip -d /tmp/dl/bt
+            AAPT=$(find /tmp/dl/bt -name aapt -type f | head -1)
+            echo "aapt found at: $AAPT"
+            mv "$(dirname "$AAPT")" "$SDK/build-tools/30.0.3"
+            chmod +x "$SDK/build-tools/30.0.3/"* || true
           fi
-          echo "sdk.dir=$SDK" > app/local.properties
 
-      - name: Build unsigned-ish APK via legacy ant-layout script
+          if [ ! -f "$SDK/platforms/android-28/android.jar" ]; then
+            echo "==> downloading platform 28"
+            curl -fsSL --retry 3 -o /tmp/dl/pf.zip \
+              https://dl.google.com/android/repository/platform-28_r06.zip
+            unzip -q /tmp/dl/pf.zip -d /tmp/dl/pf
+            JAR=$(find /tmp/dl/pf -name android.jar -type f | head -1)
+            echo "android.jar found at: $JAR"
+            mv "$(dirname "$JAR")" "$SDK/platforms/android-28"
+          fi
+
+          echo "sdk.dir=$SDK" > app/local.properties
+          echo "--- build-tools ---"
+          ls -1 "$SDK/build-tools/30.0.3" | head -20
+          echo "--- platform ---"
+          ls -1 "$SDK/platforms/android-28" | head
+          echo "--- java ---"
+          java -version 2>&1 | head -3
+
+      - name: Build APK (legacy ant-layout script)
         run: |
+          set -euo pipefail
           chmod +x app/build.sh
           bash app/build.sh
 
-      - name: Rename artifact
+      - name: Package artifact
         run: |
+          set -euo pipefail
           mkdir -p out
           SHORT=$(echo "$GITHUB_SHA" | cut -c1-7)
           cp app/bin/OAC_1.4.apk "out/OAC-root-shell-$SHORT.apk"
