@@ -263,6 +263,8 @@ public class AIRequest {
         int toolRounds = 0;
         final int MAX_TOOL_ROUNDS = 16;
         java.util.List<DsmlToolParser.Call> pending = null;
+        StringBuilder toolSummary = new StringBuilder();
+        boolean lastRoundHadText = true;
 
         while (!mCancelled && toolRounds < MAX_TOOL_ROUNDS) {
             java.util.List<DsmlToolParser.Call> calls = new java.util.ArrayList<DsmlToolParser.Call>();
@@ -302,6 +304,7 @@ public class AIRequest {
                 toolHistory.append(",{\"role\":\"tool\",\"tool_call_id\":")
                     .append(jsonStr(callId(toolRounds, i)))
                     .append(",\"content\":").append(jsonStr(result)).append("}");
+                appendToolSummary(toolSummary, c.name, c.args, result);
             }
 
             // 3) 界面状态
@@ -313,6 +316,7 @@ public class AIRequest {
             scheduleFlush();
 
             // 4) 续问（不带 tools，避免死循环）
+            final int lenBeforeRound = fullContent.length();
             String followUpBody = buildFollowUpBody(mModel, mHistory, mUserMessage, mImages,
                     toolHistory.toString(), true);
             AIClient.Connection conn2 = AIClient.connect(mModel, followUpBody);
@@ -375,10 +379,14 @@ public class AIRequest {
             if (toolCallId == null && mDsml.hasToolCalls()) {
                 pending = DsmlToolParser.parse(mDsml.dsmlText());
             }
+            lastRoundHadText = fullContent.length() > lenBeforeRound;
         }
 
-        // 兜底：用了工具但没有任何文字
-        if (fullContent.length() == 0 && toolHistory.length() > 0) {
+        // 兜底：模型执行完工具却没写正文时，把实际执行结果直接展示给用户，
+        // 否则界面上会什么都没有（模型只输出思考、正文为空的情况）。
+        if (toolHistory.length() > 0 && (fullContent.toString().trim().length() == 0 || !lastRoundHadText)) {
+            fullContent.append("\n\n").append(toolSummary);
+        } else if (fullContent.length() == 0 && toolHistory.length() > 0) {
             fullContent.append("(model returned no text after using tools)");
         }
 
@@ -386,6 +394,26 @@ public class AIRequest {
         mFlushRunnable.run();
         mHandler.obtainMessage(MSG_COMPLETE,
                 new CompleteInfo(fullContent.toString(), fullReasoning.toString())).sendToTarget();
+    }
+
+    /** 把一次工具调用压缩成一行摘要，用于模型没写正文时兜底展示 */
+    private static void appendToolSummary(StringBuilder sb, String name, String args, String result) {
+        String cmd = "";
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(args == null ? "{}" : args);
+            cmd = o.optString("command", o.optString("query", o.optString("url", "")));
+        } catch (Throwable t) {
+            cmd = args == null ? "" : args;
+        }
+        cmd = cmd.replace("\n", " ").trim();
+        if (cmd.length() > 160) cmd = cmd.substring(0, 160) + "…";
+
+        String out = result == null ? "" : result.replace("\r", "").trim();
+        if (out.length() > 1200) out = out.substring(0, 1200) + "…(已截断)";
+
+        sb.append("\n▸ ").append(name);
+        if (cmd.length() > 0) sb.append(": ").append(cmd);
+        sb.append("\n").append(out).append("\n");
     }
 
     /** 生成稳定的 tool_call id */
