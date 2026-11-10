@@ -6,22 +6,14 @@ import java.util.List;
 /**
  * 解析模型以纯文本形式输出的工具调用（DSML 标记）。
  *
- * 部分模型/中转层不通过 API 的 tool_calls 字段返回调用，而是在正文里输出：
+ * 实测发现不同模型/网关会输出不同的标记写法，必须全部兼容：
  *
- *   &lt;|DSML|calls&gt;
- *   &lt;|DSML|invoke name="run_shell"&gt;
- *   &lt;|DSML|parameter name="command" string="true"&gt;su -c id&lt;|/DSML|parameter&gt;
- *   &lt;|DSML|parameter name="purpose" string="true"&gt;确认 root&lt;|/DSML|parameter&gt;
- *   &lt;/|DSML|invoke&gt;
- *   &lt;/|DSML|calls&gt;
+ *   半角：<|DSML|invoke name="run_shell">      </|DSML|invoke>
+ *   斜杠在前：<|/DSML|parameter>                （闭合标签的另一种写法）
+ *   全角（实测！）：<｜｜DSML｜｜ invoke ...>     </｜｜DSML｜｜ invoke>
  *
- * 这里负责两件事：
- *   1) 流式过滤：不把标签显示给用户，同时把标签内容收集下来；
- *   2) 解析：把标签还原成结构化调用，交给 ShellGate 等去执行。
- *
- * 兼容两种参数写法：
- *   - 单个 arguments 参数里塞一个 JSON：{"command":"...","purpose":"..."}
- *   - 每个字段一个 parameter：name="command" / name="purpose"
+ * 因此解析时**不依赖竖线字符**：只要能找到 "dsml" 字样 + 紧邻的 < >，
+ * 就把它当作标签边界处理。标签内容一律不进正文显示。
  */
 public final class DsmlToolParser {
 
@@ -31,6 +23,14 @@ public final class DsmlToolParser {
     }
 
     private DsmlToolParser() {}
+
+    /** 全角竖线等异体字符先归一化，方便后续判断 */
+    private static String normalize(String s) {
+        if (s == null) return "";
+        return s.replace('\uFF5C', '|')   // ｜
+                .replace('\u02D8', '|')
+                .replace('\u2016', '|');
+    }
 
     // ==================== 流式过滤 ====================
 
@@ -61,9 +61,9 @@ public final class DsmlToolParser {
                         mInTag = false;
                         String lowerTag = tag.toLowerCase();
                         if (lowerTag.indexOf("dsml") >= 0) {
-                            mDsml.append(tag);
-                            // 闭合标签有两种写法：</|DSML|xxx> 与 <|/DSML|xxx>
-                            boolean closing = lowerTag.startsWith("</") || lowerTag.startsWith("<|/");
+                            mDsml.append(tag).append(' ');
+                            boolean closing = lowerTag.startsWith("</") || lowerTag.startsWith("<|/")
+                                    || lowerTag.startsWith("<\uFF5C/") || lowerTag.startsWith("<|/");
                             if (closing) {
                                 if (lowerTag.indexOf("call") >= 0) mInDsml = false;
                             } else {
@@ -74,8 +74,7 @@ public final class DsmlToolParser {
                         }
                         continue;
                     }
-                    if (mTag.length() > 64) {
-                        // 看起来不是标签，原样吐出
+                    if (mTag.length() > 160) {
                         out.append(mTag);
                         mTag.setLength(0);
                         mInTag = false;
@@ -97,7 +96,6 @@ public final class DsmlToolParser {
             return out.toString();
         }
 
-        /** 流结束时把缓冲里剩下的可见文本吐出 */
         public String flush() {
             String tail = "";
             if (mInTag && mTag.length() > 0) {
@@ -109,11 +107,64 @@ public final class DsmlToolParser {
         }
 
         public boolean hasToolCalls() {
-            return mDsml.indexOf("|DSML|") >= 0 || mDsml.indexOf("|dsml|") >= 0;
+            String s = normalize(mDsml.toString()).toLowerCase();
+            return s.indexOf("dsml") >= 0;
         }
 
         public String dsmlText() {
             return mDsml.toString();
+        }
+    }
+
+    // ==================== 标签识别（不依赖竖线） ====================
+
+    /**
+     * 判断 text 中 pos 处的 '<' 开始的是不是一个 DSML 标签，
+     * 是则返回标签内 dsml 之后紧跟的名字（小写），否则返回 null。
+     */
+    private static String tagNameAt(String s, int lt) {
+        if (lt < 0 || lt >= s.length() || s.charAt(lt) != '<') return null;
+        int limit = Math.min(s.length(), lt + 160);
+        int gt = s.indexOf('>', lt);
+        if (gt < 0 || gt >= limit) return null;
+        String inner = normalize(s.substring(lt + 1, gt));
+        int d = inner.toLowerCase().indexOf("dsml");
+        if (d < 0) return null;
+        // dsml 之后跳过非字母字符，取名字
+        int k = d + 4;
+        while (k < inner.length() && !isLetter(inner.charAt(k))) k++;
+        int start = k;
+        while (k < inner.length() && isLetter(inner.charAt(k))) k++;
+        String name = inner.substring(start, k).toLowerCase();
+        boolean closing = inner.indexOf('/') >= 0;
+        return closing ? ("/" + name) : name;
+    }
+
+    private static boolean isLetter(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    }
+
+    /** 找到从 from 开始的下一个 DSML 标签的 '<' 位置 */
+    private static int nextDsmlTag(String s, int from) {
+        int i = Math.max(0, from);
+        while (true) {
+            int lt = s.indexOf('<', i);
+            if (lt < 0) return -1;
+            if (tagNameAt(s, lt) != null) return lt;
+            i = lt + 1;
+        }
+    }
+
+    /** 找到从 from 开始的下一个指定名字的开启标签 */
+    private static int nextOpeningTag(String s, String name, int from) {
+        int i = Math.max(0, from);
+        while (true) {
+            int lt = nextDsmlTag(s, i);
+            if (lt < 0) return -1;
+            String n = tagNameAt(s, lt);
+            if (n != null && n.equals(name)) return lt;
+            int gt = s.indexOf('>', lt);
+            i = gt < 0 ? s.length() : gt + 1;
         }
     }
 
@@ -122,49 +173,51 @@ public final class DsmlToolParser {
     public static List<Call> parse(String text) {
         List<Call> out = new ArrayList<Call>();
         if (text == null || text.length() == 0) return out;
+        String s = normalize(text);
 
         int pos = 0;
         while (true) {
-            int inv = indexOfIgnoreCase(text, "invoke", pos);
+            int inv = nextOpeningTag(s, "invoke", pos);
             if (inv < 0) break;
+            int invGt = s.indexOf('>', inv);
+            if (invGt < 0) break;
 
-            int ne = indexOfIgnoreCase(text, "name=", inv);
-            if (ne < 0) break;
-            int qPos = ne + 5;
-            if (qPos >= text.length()) break;
-            char q = text.charAt(qPos);
-            if (q != '"' && q != '\'') {
-                pos = ne + 5;
+            // 取 name="xxx"
+            String name = attrValue(s, inv, invGt, "name");
+            if (name == null || name.length() == 0) {
+                pos = invGt + 1;
                 continue;
             }
-            int vs = qPos + 1;
-            int ve = text.indexOf(q, vs);
-            if (ve < 0) break;
-            String name = text.substring(vs, ve).trim();
 
-            int nextInv = indexOfIgnoreCase(text, "invoke", ve);
-            // 闭合标签可能是 </|DSML|invoke> 或 <|/DSML|invoke>，统一按名字匹配
-            int closeInv = indexOfIgnoreCase(text, "dsml|invoke", ve);
+            // 本 invoke 的范围：到下一个 invoke 开启标签或文末
+            int nextInv = nextOpeningTag(s, "invoke", invGt + 1);
+            int segEnd = nextInv >= 0 ? nextInv : s.length();
 
-            int segEnd;
-            if (closeInv >= 0 && (nextInv < 0 || closeInv < nextInv)) {
-                segEnd = closeInv;
-            } else if (nextInv >= 0) {
-                segEnd = nextInv;
-            } else {
-                segEnd = text.length();
-            }
-            if (segEnd < ve) segEnd = ve;
-
-            String body = text.substring(ve, segEnd);
+            String body = s.substring(invGt + 1, segEnd);
             Call call = new Call();
             call.name = name;
             call.args = extractArgs(body);
-            if (call.name != null && call.name.length() > 0) out.add(call);
+            out.add(call);
 
-            pos = segEnd > ve ? segEnd : ve + 1;
+            pos = segEnd > invGt ? segEnd : invGt + 1;
         }
         return out;
+    }
+
+    /** 从标签里取属性值，如 name="run_shell" */
+    private static String attrValue(String s, int lt, int gt, String attr) {
+        String inner = s.substring(lt, gt);
+        int i = indexOfIgnoreCase(inner, attr + "=", 0);
+        if (i < 0) i = indexOfIgnoreCase(inner, attr + " =", 0);
+        if (i < 0) return null;
+        int k = i + attr.length();
+        while (k < inner.length() && (inner.charAt(k) == '=' || inner.charAt(k) == ' ')) k++;
+        if (k >= inner.length()) return null;
+        char q = inner.charAt(k);
+        if (q != '"' && q != '\'') return null;
+        int end = inner.indexOf(q, k + 1);
+        if (end < 0) return null;
+        return inner.substring(k + 1, end).trim();
     }
 
     /** 从一个 invoke 的片段里提取参数 JSON */
@@ -174,36 +227,29 @@ public final class DsmlToolParser {
 
         int pos = 0;
         while (true) {
-            int pi = indexOfIgnoreCase(body, "parameter", pos);
-            if (pi < 0) break;
-            int ne = indexOfIgnoreCase(body, "name=", pi);
-            if (ne < 0) break;
-            int qPos = ne + 5;
-            if (qPos >= body.length()) break;
-            char q = body.charAt(qPos);
-            if (q != '"' && q != '\'') {
-                pos = ne + 5;
+            int p = nextOpeningTag(body, "parameter", pos);
+            if (p < 0) break;
+            int gt = body.indexOf('>', p);
+            if (gt < 0) break;
+            String pname = attrValue(body, p, gt, "name");
+            if (pname == null || pname.length() == 0) {
+                pos = gt + 1;
                 continue;
             }
-            int vs = qPos + 1;
-            int ve = body.indexOf(q, vs);
-            if (ve < 0) break;
-            String pname = body.substring(vs, ve).trim();
 
-            int gt = body.indexOf('>', ve);
-            if (gt < 0) break;
+            // 值：从 '>' 之后，到下一个 parameter 开启标签（或本段结束）
+            int nextP = nextOpeningTag(body, "parameter", gt + 1);
+            int vEnd = nextP >= 0 ? nextP : body.length();
+            String val = body.substring(gt + 1, vEnd);
 
-            int close = indexOfIgnoreCase(body, "dsml|parameter", gt);
-            int valueEnd = close >= 0 ? close : body.length();
-            String pval = body.substring(gt + 1, valueEnd).trim();
-            // 去掉闭合标签可能带的前缀 “<”
-            while (pval.endsWith("<") || pval.endsWith("|") || pval.endsWith("/")) {
-                pval = pval.substring(0, pval.length() - 1).trim();
-            }
+            // 值里如果还夹着闭合标签，从第一个标签处截断
+            int cut = nextDsmlTag(val, 0);
+            if (cut >= 0) val = val.substring(0, cut);
+
             names.add(pname);
-            values.add(pval);
+            values.add(trimTagChars(val));
 
-            pos = close >= 0 ? close + 10 : body.length();
+            pos = vEnd > gt ? vEnd : gt + 1;
         }
 
         // 优先：单个 arguments 参数里就是完整 JSON
@@ -223,9 +269,25 @@ public final class DsmlToolParser {
             }
             if (o.length() > 0) return o.toString();
         } catch (Throwable t) {
-            // 忽略，回落到空对象
+            // ignore
         }
         return "{}";
+    }
+
+    /** 去掉值尾部的标签残余字符 */
+    private static String trimTagChars(String v) {
+        if (v == null) return "";
+        String s = v.trim();
+        while (s.length() > 0) {
+            char c = s.charAt(s.length() - 1);
+            if (c == '<' || c == '>' || c == '|' || c == '/' || c == ' ' || c == '\n' || c == '\r'
+                    || c == '\uFF5C') {
+                s = s.substring(0, s.length() - 1).trim();
+            } else {
+                break;
+            }
+        }
+        return s;
     }
 
     private static int indexOfIgnoreCase(String s, String needle, int from) {
