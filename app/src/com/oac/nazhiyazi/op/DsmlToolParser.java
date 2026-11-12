@@ -194,13 +194,70 @@ public final class DsmlToolParser {
             int segEnd = nextInv >= 0 ? nextInv : s.length();
 
             String body = s.substring(invGt + 1, segEnd);
-            Call call = new Call();
-            call.name = name;
-            call.args = extractArgs(body);
-            out.add(call);
+            String args = extractArgs(body);
+
+            // 实测：模型偶尔会把多个 JSON 对象塞进同一个 parameter，例如
+            //   {"command":"id"}{"command":"cat /proc/meminfo"}
+            // 只取第一个会静默丢掉后面的调用，所以这里拆分。
+            List<String> parts = splitConcatenatedJson(args);
+            if (parts.size() > 1) {
+                for (int i = 0; i < parts.size(); i++) {
+                    Call c = new Call();
+                    c.name = name;
+                    c.args = parts.get(i);
+                    out.add(c);
+                }
+            } else {
+                Call call = new Call();
+                call.name = name;
+                call.args = args;
+                out.add(call);
+            }
 
             pos = segEnd > invGt ? segEnd : invGt + 1;
         }
+        return out;
+    }
+
+    /**
+     * 把连在一起的多个 JSON 对象拆开：{"a":1}{"b":2} → ["{"a":1}", "{"b":2}"]
+     * 拆不开（正常单个 JSON）时返回单元素列表。
+     */
+    private static List<String> splitConcatenatedJson(String s) {
+        List<String> out = new ArrayList<String>();
+        if (s == null) return out;
+        String t = s.trim();
+        if (t.length() == 0 || t.charAt(0) != '{') {
+            out.add(t);
+            return out;
+        }
+        int depth = 0;
+        boolean inStr = false;
+        boolean esc = false;
+        int start = -1;
+        for (int i = 0; i < t.length(); i++) {
+            char c = t.charAt(i);
+            if (inStr) {
+                if (esc) esc = false;
+                else if (c == '\\') esc = true;
+                else if (c == '"') inStr = false;
+                continue;
+            }
+            if (c == '"') {
+                inStr = true;
+            } else if (c == '{') {
+                if (depth == 0) start = i;
+                depth++;
+            } else if (c == '}') {
+                depth--;
+                if (depth == 0 && start >= 0) {
+                    String one = t.substring(start, i + 1).trim();
+                    if (one.length() > 1) out.add(one);
+                    start = -1;
+                }
+            }
+        }
+        if (out.isEmpty()) out.add(t);
         return out;
     }
 

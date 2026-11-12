@@ -213,11 +213,13 @@ public class AIRequest {
         StringBuilder toolCallArgsBuf = new StringBuilder();
         // 本轮思考：思考模式下带 tool_calls 的 assistant 消息必须回传 reasoning_content
         StringBuilder roundReasoning = new StringBuilder();
+        String finishReason = "";
         String line;
 
         while (!mCancelled && (line = reader.readLine()) != null) {
             StreamDelta d = AIClient.parseStreamLine(line);
             if (d == null) break;
+            if (d.finishReason != null && d.finishReason.length() > 0) finishReason = d.finishReason;
             if (d.isToolCall) {
                 if (d.toolCallId != null) toolCallId = d.toolCallId;
                 if (d.toolCallName != null) toolCallName = d.toolCallName;
@@ -265,6 +267,7 @@ public class AIRequest {
         java.util.List<DsmlToolParser.Call> pending = null;
         StringBuilder toolSummary = new StringBuilder();
         boolean lastRoundHadText = true;
+        int idleRounds = 0;
         // 逐条串行执行：模型一轮可能发多个调用，但这类模型通常只认得一条结果，
         // 所以这里排队，一次只执行并回传一条。
         java.util.List<DsmlToolParser.Call> queue = new java.util.ArrayList<DsmlToolParser.Call>();
@@ -439,10 +442,25 @@ public class AIRequest {
             }
             lastRoundHadText = fullContent.length() > lenBeforeRound;
             dumpRawRound(toolRounds, dsmRawOf(mDsml), fullContent.length(), lenBeforeRound);
+            // 本轮既没有新正文、也没有新调用 → 模型已经无话可说，别继续空转
+            boolean noNewWork = !lastRoundHadText
+                    && (pending == null || pending.isEmpty())
+                    && toolCallId == null;
+            if (noNewWork) {
+                idleRounds++;
+                debugLog("  idle round " + idleRounds + " (no text, no new call)");
+                if (idleRounds >= 1) {
+                    debugLog("  stop: model produced nothing new, ending loop");
+                    break;
+                }
+            } else {
+                idleRounds = 0;
+            }
             debugLog("  stream done: contentLen=" + fullContent.length()
                     + " grew=" + lastRoundHadText
                     + " pending=" + (pending == null ? 0 : pending.size())
-                    + " dsml=" + mDsml.hasToolCalls());
+                    + " dsml=" + mDsml.hasToolCalls()
+                    + " finish=" + finishReason);
         }
 
         debugLog("loop end rounds=" + toolRounds + " contentLen=" + fullContent.length()
@@ -450,10 +468,26 @@ public class AIRequest {
 
         // 兜底：模型执行完工具却没写正文时，把实际执行结果直接展示给用户，
         // 否则界面上会什么都没有（模型只输出思考、正文为空的情况）。
-        if (toolHistory.length() > 0 && (fullContent.toString().trim().length() == 0 || !lastRoundHadText)) {
+        if (fullContent.toString().trim().length() == 0) {
+            if (toolSummary.length() > 0) {
+                fullContent.append("模型只输出了思考，没有给出正文。以下是实际执行的命令与输出：\n")
+                          .append(toolSummary);
+            } else if (fullReasoning.length() > 0) {
+                fullContent.append("模型本轮只输出了思考、没有给出正文。");
+                if ("length".equals(finishReason)) {
+                    fullContent.append("\n原因：回复长度达到上限（finish_reason=length），思考把额度用光了。")
+                              .append("\n处理：把「最大回复长度」调到 2048 以上，或改用「不思考」模式后重试。");
+                } else {
+                    fullContent.append("\n可以尝试：把「最大回复长度」调大，或改用「不思考」模式后重试。");
+                }
+            } else if (toolHistory.length() > 0) {
+                fullContent.append("(model returned no text after using tools)");
+            } else {
+                fullContent.append("模型没有返回任何内容（空响应）。请重试，或把「最大回复长度」调大后重试。");
+            }
+        } else if (toolHistory.length() > 0 && !lastRoundHadText && toolSummary.length() > 0) {
+            // 有正文但最后一轮模型沉默了 → 把工具结果附在末尾，别丢掉
             fullContent.append("\n\n").append(toolSummary);
-        } else if (fullContent.length() == 0 && toolHistory.length() > 0) {
-            fullContent.append("(model returned no text after using tools)");
         }
 
         mHandler.removeCallbacks(mFlushRunnable);

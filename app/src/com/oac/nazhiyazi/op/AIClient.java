@@ -453,6 +453,9 @@ public class AIClient {
                         }
                     }
                 }
+                // finish_reason 在 choices[0] 层，可能和 delta 同 chunk 出现，也可能只在最后一条
+                String fr = safeOptString(first, "finish_reason");
+                if (fr.length() > 0) d.finishReason = fr;
             }
         } catch (Exception e) {
         }

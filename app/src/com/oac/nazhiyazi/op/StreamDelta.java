@@ -19,6 +19,9 @@ public class StreamDelta {
     /** function arguments 的 JSON 片段（逐 chunk 追加） */
     public String toolCallArgs;
 
+    /** 结束原因：stop / length / tool_calls 等。length 表示被 max_tokens 截断 */
+    public String finishReason;
+
     public boolean hasContent() {
         return content != null && content.length() > 0;
     }
