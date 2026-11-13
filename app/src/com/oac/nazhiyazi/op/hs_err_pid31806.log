@@ -1,0 +1,426 @@
+#
+# There is insufficient memory for the Java Runtime Environment to continue.
+# Cannot create worker GC thread. Out of system resources.
+# Possible reasons:
+#   The system is out of physical RAM or swap space
+#   This process is running with CompressedOops enabled, and the Java Heap may be blocking the growth of the native heap
+# Possible solutions:
+#   Reduce memory load on the system
+#   Increase physical memory or swap space
+#   Check if swap backing store is full
+#   Decrease Java heap size (-Xmx/-Xms)
+#   Decrease number of Java threads
+#   Decrease Java thread stack sizes (-Xss)
+#   Set larger code cache with -XX:ReservedCodeCacheSize=
+#   JVM is running with Zero Based Compressed Oops mode in which the Java heap is
+#     placed in the first 32GB address space. The Java Heap base address is the
+#     maximum limit for the native heap growth. Please use -XX:HeapBaseMinAddress
+#     to set the Java Heap base and to place the Java Heap above 32GB virtual address.
+# This output file may be truncated or incomplete.
+#
+#  Out of Memory Error (workerManager.hpp:87), pid=31806, tid=31806
+#
+# JRE version:  (17.0.20.1+1) (build )
+# Java VM: OpenJDK 64-Bit Server VM (17.0.20.1+1-1-24.04-Ubuntu, mixed mode, sharing, tiered, compressed oops, compressed class ptrs, g1 gc, linux-aarch64)
+# Core dump will be written. Default location: core.31806 (may not exist)
+#
+
+---------------  S U M M A R Y ------------
+
+Command Line: 
+
+Host: AArch64 Processor rev 14 (aarch64), 8 cores, 11G, Ubuntu 24.04.5 LTS
+Time: Fri Nov 13 04:18:41 2026 UTC elapsed time: 0.140155 seconds (0d 0h 0m 0s)
+
+---------------  T H R E A D  ---------------
+
+Current thread (0x0000003000062110):  JavaThread "Unknown thread" [_thread_in_vm, id=31806, stack(0x0000007fe3aaa000,0x0000007fe42a9000)]
+
+Stack: [0x0000007fe3aaa000,0x0000007fe42a9000],  sp=0x0000007fe42a1bf0,  free space=8158k
+Native frames: (J=compiled Java code, j=interpreted, Vv=VM code, C=native code)
+V  [libjvm.so+0xec4ae8]  VMError::report_and_die(int, char const*, char const*, std::__va_list, Thread*, unsigned char*, void*, void*, char const*, int, unsigned long)+0x158
+V  [libjvm.so+0xec5660]  VMError::report_and_die(Thread*, char const*, int, unsigned long, VMErrorType, char const*, std::__va_list)+0x50
+V  [libjvm.so+0x613850]  report_vm_out_of_memory(char const*, int, unsigned long, VMErrorType, char const*, ...)+0xe0
+V  [libjvm.so+0xee9028]  WorkerManager::add_workers(WorkGang*, unsigned int, unsigned int, unsigned int, os::ThreadType, bool)+0x254
+V  [libjvm.so+0xee9244]  WorkGang::initialize_workers()+0x54
+V  [libjvm.so+0x6f4bdc]  G1CollectedHeap::initialize()+0x52c
+V  [libjvm.so+0xe77b8c]  universe_init()+0xec
+V  [libjvm.so+0x806df8]  init_globals()+0x34
+V  [libjvm.so+0xe4d174]  Threads::create_vm(JavaVMInitArgs*, bool*)+0x2b4
+V  [libjvm.so+0x8cbd94]  JNI_CreateJavaVM+0x84
+C  [libjli.so+0x3538]  JavaMain+0x84
+C  [libjli.so+0x7dd8]  CallJavaMainInNewThread+0xa8
+C  [libjli.so+0x5368]  ContinueInNewThread+0x68
+C  [libjli.so+0x6534]  JLI_Launch+0x1004
+C  [java+0xad8]
+C  [libc.so.6+0x284c4]
+C  [libc.so.6+0x28598]  __libc_start_main+0x98
+
+
+---------------  P R O C E S S  ---------------
+
+Threads class SMR info:
+_java_thread_list=0x0000007256254ef0, length=0, elements={
+}
+
+Java Threads: ( => current thread )
+
+Other Threads:
+
+[error occurred during error reporting (printing all threads), id 0xb, SIGSEGV (0xb) at pc=0x0000007255561988]
+
+VM state: not at safepoint (not fully initialized)
+
+VM Mutex/Monitor currently owned by a thread:  ([mutex/lock_event])
+[0x000000300005fd60] Heap_lock - owner thread: 0x0000003000062110
+
+Heap address: 0x000000074ac00000, size: 2900 MB, Compressed Oops mode: Zero based, Oop shift amount: 3
+
+CDS archive(s) mapped at: [0x0000000000000000-0x0000000000000000-0x0000000000000000), size 0, SharedBaseAddress: 0x0000000800000000, ArchiveRelocationMode: 1.
+Narrow klass base: 0x0000000000000000, Narrow klass shift: 0, Narrow klass range: 0x0
+
+GC Precious Log:
+<Empty>
+
+Heap:
+ garbage-first heap   total 0K, used 0K [0x000000074ac00000, 0x0000000800000000)
+  region size 2048K, 0 young (0K), 0 survivors (0K)
+
+[error occurred during error reporting (printing heap information), id 0xb, SIGSEGV (0xb) at pc=0x0000007255aedd30]
+
+GC Heap History (0 events):
+No events
+
+Dll operation events (1 events):
+Event: 0.081 Loaded shared library /usr/lib/jvm/java-17-openjdk-arm64/lib/libjava.so
+
+Deoptimization events (0 events):
+No events
+
+Classes loaded (0 events):
+No events
+
+Classes unloaded (0 events):
+No events
+
+Classes redefined (0 events):
+No events
+
+Internal exceptions (0 events):
+No events
+
+VM Operations (0 events):
+No events
+
+Memory protections (1 events):
+Event: 0.068 Protecting memory [0x0000007fe3aaa000,0x0000007fe3aae000] with protection modes 0
+
+Nmethod flushes (0 events):
+No events
+
+Events (0 events):
+No events
+
+
+Dynamic libraries:
+74ac00000-800000000 ---p 00000000 00:00 0 
+2000000000-2000001000 r--p 00000000 03:12 124394 /data/app/~~NAHFGc0Ut8PJ0GlH2l9Kjw==/com.ai.assistance.operit-OmkI2Nruq8jYZhIWu6Hx8g==/lib/arm64/liboperit_loader.so
+2000004000-2000005000 r-xp 00000000 03:12 124394 /data/app/~~NAHFGc0Ut8PJ0GlH2l9Kjw==/com.ai.assistance.operit-OmkI2Nruq8jYZhIWu6Hx8g==/lib/arm64/liboperit_loader.so
+3000000000-3000001000 r-xp 00000000 03:12 232253 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/bin/java
+300001f000-3000020000 r--p 0000f000 03:12 232253 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/bin/java
+3000020000-3000021000 rw-p 00010000 03:12 232253 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/bin/java
+3000021000-30000f9000 rw-p 00000000 00:00 0 
+3f00000000-3f00027000 r-xp 00000000 03:12 149826 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1
+3f0003e000-3f00040000 r--p 0002e000 03:12 149826 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1
+3f00040000-3f00042000 rw-p 00030000 03:12 149826 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1
+723613b000-723659f000 rw-p 00000000 00:00 0 
+723659f000-72365af000 ---p 00000000 00:00 0 
+72365af000-72367f4000 rw-p 00000000 00:00 0 
+72367f4000-723d392000 ---p 00000000 00:00 0 
+723d392000-723db9f000 rw-p 00000000 00:00 0 
+723db9f000-723dc85000 ---p 00000000 00:00 0 
+723dc85000-723dc8a000 rw-p 00000000 00:00 0 
+723dc8a000-723dd70000 ---p 00000000 00:00 0 
+723dd70000-723dfe0000 rwxp 00000000 00:00 0 
+723dfe0000-72452a7000 ---p 00000000 00:00 0 
+72452a7000-7245517000 rwxp 00000000 00:00 0 
+7245517000-7245839000 ---p 00000000 00:00 0 
+7245839000-7245aa9000 rwxp 00000000 00:00 0 
+7245aa9000-724cd70000 ---p 00000000 00:00 0 
+724cd70000-724cd96000 r-xp 00000000 03:12 234308 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjava.so
+724cd96000-724cdaf000 ---p 00026000 03:12 234308 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjava.so
+724cdaf000-724cdb0000 r--p 0002f000 03:12 234308 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjava.so
+724cdb0000-724cdb1000 rw-p 00030000 03:12 234308 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjava.so
+724cdba000-72548c0000 r--s 00000000 03:12 234631 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/modules
+72548c0000-72548c5000 r-xp 00000000 03:12 234347 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjimage.so
+72548c5000-72548df000 ---p 00005000 03:12 234347 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjimage.so
+72548df000-72548e0000 r--p 0000f000 03:12 234347 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjimage.so
+72548e0000-72548e1000 rw-p 00010000 03:12 234347 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjimage.so
+72548e2000-7254ae0000 rw-p 00000000 00:00 0 
+7254ae0000-7254aff000 r-xp 00000000 03:12 151602 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libgcc_s.so.1
+7254aff000-7254b0f000 ---p 0001f000 03:12 151602 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libgcc_s.so.1
+7254b0f000-7254b10000 r--p 0001f000 03:12 151602 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libgcc_s.so.1
+7254b10000-7254b11000 rw-p 00020000 03:12 151602 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libgcc_s.so.1
+7254b20000-7254ba5000 r-xp 00000000 03:12 118001 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libm.so.6
+7254ba5000-7254bbf000 ---p 00085000 03:12 118001 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libm.so.6
+7254bbf000-7254bc0000 r--p 0008f000 03:12 118001 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libm.so.6
+7254bc0000-7254bc1000 rw-p 00090000 03:12 118001 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libm.so.6
+7254bd0000-7254e3d000 r-xp 00000000 03:12 151641 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libstdc++.so.6.0.33
+7254e3d000-7254e45000 ---p 0026d000 03:12 151641 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libstdc++.so.6.0.33
+7254e45000-7254e50000 r--p 00275000 03:12 151641 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libstdc++.so.6.0.33
+7254e50000-7254e53000 rw-p 00280000 03:12 151641 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libstdc++.so.6.0.33
+7254e53000-7254e57000 rw-p 00000000 00:00 0 
+7254e60000-72560d0000 r-xp 00000000 03:12 235899 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/server/libjvm.so
+72560d0000-72560dd000 ---p 01270000 03:12 235899 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/server/libjvm.so
+72560dd000-72561b0000 r--p 0127d000 03:12 235899 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/server/libjvm.so
+72561b0000-72561e1000 rw-p 01350000 03:12 235899 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/server/libjvm.so
+72561e1000-725625f000 rw-p 00000000 00:00 0 
+7256260000-72563fa000 r-xp 00000000 03:12 149860 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libc.so.6
+72563fa000-725640d000 ---p 0019a000 03:12 149860 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libc.so.6
+725640d000-7256410000 r--p 0019d000 03:12 149860 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libc.so.6
+7256410000-7256412000 rw-p 001a0000 03:12 149860 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libc.so.6
+7256412000-725641e000 rw-p 00000000 00:00 0 
+7256420000-725642e000 r-xp 00000000 03:12 234349 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjli.so
+725642e000-725643f000 ---p 0000e000 03:12 234349 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjli.so
+725643f000-7256440000 r--p 0000f000 03:12 234349 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjli.so
+7256440000-7256441000 rw-p 00010000 03:12 234349 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/jvm/java-17-openjdk-arm64/lib/libjli.so
+7256444000-7256449000 rw-p 00000000 00:00 0 
+7256449000-7256450000 ---p 00000000 00:00 0 
+7256450000-725646a000 r-xp 00000000 03:12 154673 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libz.so.1.3
+725646a000-725647f000 ---p 0001a000 03:12 154673 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libz.so.1.3
+725647f000-7256480000 r--p 0001f000 03:12 154673 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libz.so.1.3
+7256480000-7256481000 rw-p 00020000 03:12 154673 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/usr/lib/aarch64-linux-gnu/libz.so.1.3
+7256487000-725648f000 rw-s 00000000 03:12 737087 /data/data/com.ai.assistance.operit/files/usr/var/lib/proot-distro/installed-rootfs/ubuntu/tmp/hsperfdata_root/31806
+725648f000-7256491000 rw-p 00000000 00:00 0 
+7256492000-7256493000 ---p 00000000 00:00 0 
+7256493000-7256494000 r--p 00000000 00:00 0 
+7256494000-7256495000 ---p 00000000 00:00 0 
+7256495000-7256497000 rw-p 00000000 00:00 0 
+7256497000-7256498000 r--p 00000000 00:00 0 [vvar]
+7256498000-7256499000 r-xp 00000000 00:00 0 [vdso]
+7fe3aaa000-7fe3aae000 ---p 00000000 00:00 0 
+7fe4289000-7fe42aa000 rw-p 00000000 00:00 0 [stack]
+
+
+VM Arguments:
+java_command: <unknown>
+java_class_path (initial): <not set>
+Launcher Type: SUN_STANDARD
+
+[Global flags]
+     intx CICompilerCount                          = 4                                         {product} {ergonomic}
+     uint ConcGCThreads                            = 2                                         {product} {ergonomic}
+     uint G1ConcRefinementThreads                  = 8                                         {product} {ergonomic}
+   size_t G1HeapRegionSize                         = 2097152                                   {product} {ergonomic}
+    uintx GCDrainStackTargetSize                   = 64                                        {product} {ergonomic}
+   size_t InitialHeapSize                          = 190840832                                 {product} {ergonomic}
+   size_t MarkStackSize                            = 4194304                                   {product} {ergonomic}
+   size_t MaxHeapSize                              = 3040870400                                {product} {ergonomic}
+   size_t MinHeapDeltaBytes                        = 2097152                                   {product} {ergonomic}
+   size_t MinHeapSize                              = 8388608                                   {product} {ergonomic}
+    uintx NonNMethodCodeHeapSize                   = 5839564                                {pd product} {ergonomic}
+    uintx NonProfiledCodeHeapSize                  = 122909338                              {pd product} {ergonomic}
+    uintx ProfiledCodeHeapSize                     = 122909338                              {pd product} {ergonomic}
+    uintx ReservedCodeCacheSize                    = 251658240                              {pd product} {ergonomic}
+     bool SegmentedCodeCache                       = true                                      {product} {ergonomic}
+   size_t SoftMaxHeapSize                          = 3040870400                             {manageable} {ergonomic}
+     bool UseCompressedClassPointers               = true                           {product lp64_product} {ergonomic}
+     bool UseCompressedOops                        = true                           {product lp64_product} {ergonomic}
+     bool UseG1GC                                  = true                                      {product} {ergonomic}
+
+Logging:
+Log output configuration:
+ #0: stdout all=warning uptime,level,tags
+ #1: stderr all=off uptime,level,tags
+
+Environment Variables:
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LANG=C.UTF-8
+TERM=xterm-256color
+
+Active Locale:
+LC_ALL=C
+LC_COLLATE=C
+LC_CTYPE=C
+LC_MESSAGES=C
+LC_MONETARY=C
+LC_NUMERIC=C
+LC_TIME=C
+
+Signal Handlers:
+   SIGSEGV: crash_handler in libjvm.so, mask=11100100010111111101111111111110, flags=SA_RESTART|SA_SIGINFO, unblocked
+    SIGBUS: crash_handler in libjvm.so, mask=11100100010111111101111111111110, flags=SA_RESTART|SA_SIGINFO, unblocked
+    SIGFPE: crash_handler in libjvm.so, mask=11100100010111111101111111111110, flags=SA_RESTART|SA_SIGINFO, unblocked
+   SIGPIPE: javaSignalHandler in libjvm.so, mask=11100100010111111101111111111110, flags=SA_RESTART|SA_SIGINFO, blocked
+   SIGXFSZ: javaSignalHandler in libjvm.so, mask=11100100010111111101111111111110, flags=SA_RESTART|SA_SIGINFO, blocked
+    SIGILL: crash_handler in libjvm.so, mask=11100100010111111101111111111110, flags=SA_RESTART|SA_SIGINFO, unblocked
+   SIGUSR2: SR_handler in libjvm.so, mask=00100000010010000000000000000000, flags=SA_RESTART|SA_SIGINFO, blocked
+    SIGHUP: SIG_IGN, mask=00000000000000000000000000000000, flags=none, blocked
+    SIGINT: SIG_DFL, mask=00000000000000000000000000000000, flags=none, blocked
+   SIGTERM: SIG_DFL, mask=00000000000000000000000000000000, flags=none, blocked
+   SIGQUIT: UserHandler in libjvm.so, mask=11100100010111111101111111111110, flags=SA_RESTART|SA_SIGINFO, blocked
+   SIGTRAP: crash_handler in libjvm.so, mask=11100100010111111101111111111110, flags=SA_RESTART|SA_SIGINFO, unblocked
+
+
+Periodic native trim disabled
+
+
+---------------  S Y S T E M  ---------------
+
+OS:
+DISTRIB_ID=Ubuntu
+DISTRIB_RELEASE=24.04
+DISTRIB_CODENAME=noble
+DISTRIB_DESCRIPTION="Ubuntu 24.04.5 LTS"
+uname: Linux 4.19.157-Fuutao-Qn_miao-gc50380e2c #0 SMP PREEMPT Wed Sep 30 08:50:45 CST 2026 aarch64
+OS uptime: 0 days 12:59 hours
+libc: glibc 2.39 NPTL 2.39 
+rlimit (soft/hard): STACK 8192k/infinity , CORE 0k/infinity , NPROC 44831/44831 , NOFILE 524288/524288 , AS infinity/infinity , CPU infinity/infinity , DATA infinity/infinity , FSIZE infinity/infinity , MEMLOCK 65536k/65536k
+load average: 12.94 11.27 9.45
+
+/proc/meminfo:
+MemTotal:       11873940 kB
+MemFree:          368108 kB
+MemAvailable:    4478804 kB
+Buffers:            5212 kB
+Cached:          3913244 kB
+SwapCached:        48580 kB
+Active:          5732216 kB
+Inactive:        1302304 kB
+Active(anon):    2649500 kB
+Inactive(anon):   618668 kB
+Active(file):    3082716 kB
+Inactive(file):   683636 kB
+Unevictable:      130272 kB
+Mlocked:          130272 kB
+SwapTotal:      12582908 kB
+SwapFree:        9149376 kB
+Dirty:              2780 kB
+Writeback:             0 kB
+AnonPages:       3237748 kB
+Mapped:          2313320 kB
+Shmem:             43936 kB
+KReclaimable:     487484 kB
+Slab:             630652 kB
+SReclaimable:     171492 kB
+SUnreclaim:       459160 kB
+KernelStack:      136448 kB
+PageTables:       221808 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:         12 kB
+CommitLimit:    18519876 kB
+Committed_AS:   165469596 kB
+VmallocTotal:   262930368 kB
+VmallocUsed:      282524 kB
+VmallocChunk:          0 kB
+Percpu:             9440 kB
+CmaTotal:         356352 kB
+CmaFree:            7260 kB
+
+/sys/kernel/mm/transparent_hugepage/enabled: <Not Available>
+/sys/kernel/mm/transparent_hugepage/hpage_pmd_size: <Not Available>
+/sys/kernel/mm/transparent_hugepage/defrag (defrag/compaction efforts parameter): <Not Available>
+
+Process Memory:
+Virtual Size: 3498292K (peak: 3498292K)
+Resident Set Size: 18816K (peak: 18816K) (anon: 6628K, file: 12188K, shmem: 0K)
+Swapped out: 0K
+C-Heap outstanding allocations: 13482K, retained: 97K
+glibc malloc tunables: (default)
+
+/proc/sys/kernel/threads-max (system-wide limit on the number of threads): <Not Available>
+/proc/sys/vm/max_map_count (maximum number of memory map areas a process may have): <Not Available>
+/proc/sys/vm/swappiness (control to define how aggressively the kernel swaps out anonymous memory): <Not Available>
+/proc/sys/kernel/pid_max (system-wide limit on number of process identifiers): <Not Available>
+
+container information not found.
+Steal ticks since vm start: 0
+Steal ticks percentage since vm start:  0.000
+
+CPU: total 8 (initial active 8) 0x41:0x1:0xd0d:0(0x805), fp, simd, evtstrm, aes, pmull, sha1, sha256, crc, lse, dcpop
+/proc/cpuinfo:
+Processor	: AArch64 Processor rev 14 (aarch64)
+processor	: 0
+BogoMIPS	: 38.40
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x51
+CPU architecture: 8
+CPU variant	: 0xd
+CPU part	: 0x805
+CPU revision	: 14
+
+processor	: 1
+BogoMIPS	: 38.40
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x51
+CPU architecture: 8
+CPU variant	: 0xd
+CPU part	: 0x805
+CPU revision	: 14
+
+processor	: 2
+BogoMIPS	: 38.40
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x51
+CPU architecture: 8
+CPU variant	: 0xd
+CPU part	: 0x805
+CPU revision	: 14
+
+processor	: 3
+BogoMIPS	: 38.40
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x51
+CPU architecture: 8
+CPU variant	: 0xd
+CPU part	: 0x805
+CPU revision	: 14
+
+processor	: 4
+BogoMIPS	: 38.40
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x1
+CPU part	: 0xd0d
+CPU revision	: 0
+
+processor	: 5
+BogoMIPS	: 38.40
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x1
+CPU part	: 0xd0d
+CPU revision	: 0
+
+processor	: 6
+BogoMIPS	: 38.40
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x1
+CPU part	: 0xd0d
+CPU revision	: 0
+
+processor	: 7
+BogoMIPS	: 38.40
+Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
+CPU implementer	: 0x41
+CPU architecture: 8
+CPU variant	: 0x1
+CPU part	: 0xd0d
+CPU revision	: 0
+
+Hardware	: Qualcomm Technologies, Inc SM8250
+
+Online cpus: 0-7
+Offline cpus: 
+
+Memory: 4k page, physical 11873940k(368108k free), swap 12582908k(9149376k free)
+Page Sizes: 4k
+
+vm_info: OpenJDK 64-Bit Server VM (17.0.20.1+1-1-24.04-Ubuntu) for linux-aarch64 JRE (17.0.20.1+1-1-24.04-Ubuntu), built on Aug 27 2026 21:57:10 by "buildd" with gcc 13.3.0
+
+END.

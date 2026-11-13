@@ -26,7 +26,6 @@ jobs:
           key: android-sdk-manual-bt3030-plat28-v2
 
       # 不使用 sdkmanager：新版 cmdline-tools 需要 JDK11+，在 JDK8 环境下会秒退
-      # （上一次 CI 失败就卡在这一步）。改为直接下载官方 zip 后重命名目录。
       - name: Install Android SDK (direct download, no sdkmanager)
         run: |
           set -euo pipefail
@@ -55,18 +54,23 @@ jobs:
           fi
 
           echo "sdk.dir=$SDK" > app/local.properties
-          echo "--- build-tools ---"
-          ls -1 "$SDK/build-tools/30.0.3" | head -20
-          echo "--- platform ---"
-          ls -1 "$SDK/platforms/android-28" | head
-          echo "--- java ---"
           java -version 2>&1 | head -3
 
       - name: Build APK (legacy ant-layout script)
         run: |
-          set -euo pipefail
+          set -uo pipefail
           chmod +x app/build.sh
-          bash app/build.sh
+          bash app/build.sh 2>&1 | tee /tmp/build.log
+          test ${PIPESTATUS[0]} -eq 0
+
+      # 编译失败也把完整日志传上来，避免只能靠注解猜错误
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/build.log
+          if-no-files-found: ignore
 
       - name: Package artifact
         run: |

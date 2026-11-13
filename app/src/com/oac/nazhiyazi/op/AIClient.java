@@ -165,6 +165,87 @@ public class AIClient {
         return u;
     }
 
+    /** AI 系统命令工具是否可用（仅看总开关，与 WebSearch 开关解耦） */
+    private static boolean isShellToolEnabled() {
+        try {
+            Context ctx = OACApplication.getContext();
+            if (ctx == null) return false;
+            return SettingsManager.get(ctx).isShellEnabled();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** web_search 工具描述 */
+    private static final String DESC_WEB_SEARCH =
+        "Search the web. YOU MUST USE THIS for current events, versions, releases, news. "
+        + "WRAP KEY TERMS IN QUOTES. 10 results are returned; identify 1-6 high-value URLs. "
+        + "After search, USE fetch_page to open each high-value URL one by one. "
+        + "Only answer after finding all needed facts. NEVER answer from snippets alone.";
+
+    /** fetch_page 工具描述 */
+    private static final String DESC_FETCH_PAGE =
+        "Open a URL and read full page content. REQUIRED after web_search. "
+        + "Open high-value URLs one at a time. If one page lacks complete info, open the next.";
+
+    /** run_shell 工具描述 */
+    private static final String DESC_RUN_SHELL =
+        "Run a shell command on the local Android device as root (via su). "
+        + "Use it to inspect or tune THIS device: getprop, dumpsys, cat /proc/..., ps, top, df, "
+        + "logcat -d, settings get, pm list, lsmod, cat /sys/... . "
+        + "Commands are risk-graded: read-only commands run immediately; commands that change state "
+        + "need the user to confirm a dialog; dangerous commands (reboot, rm -rf, dd, mkfs, "
+        + "pm uninstall/disable, writing to /system, setprop persist.*) are blocked unless released in settings. "
+        + "Rules: (1) Prefer read-only probes; gather facts before changing anything. "
+        + "(2) One change per command; never chain unrelated modifications. "
+        + "(3) If the result says refused or cancelled, do NOT retry; explain to the user instead. "
+        + "(4) Output is truncated, so keep commands narrow. "
+        + "(5) Explain what you change and why, and prefer reversible changes.";
+
+    /** 构造一个 string 类型属性定义 */
+    private static org.json.JSONObject stringSchema(String desc) {
+        org.json.JSONObject o = new org.json.JSONObject();
+        try {
+            o.put("type", "string");
+            o.put("description", desc == null ? "" : desc);
+        } catch (Throwable t) {}
+        return o;
+    }
+
+    /** 构造一个 function 类型的工具定义 */
+    private static org.json.JSONObject functionTool(String name, String desc, org.json.JSONObject params) {
+        org.json.JSONObject tool = new org.json.JSONObject();
+        org.json.JSONObject fn = new org.json.JSONObject();
+        try {
+            fn.put("name", name);
+            fn.put("description", desc == null ? "" : desc);
+            if (params != null) fn.put("parameters", params);
+            tool.put("type", "function");
+            tool.put("function", fn);
+        } catch (Throwable t) {}
+        return tool;
+    }
+
+    /** 构造 object 类型的参数 schema */
+    private static org.json.JSONObject objectSchema(String[] propNames, String[] propDescs, String[] required) {
+        org.json.JSONObject o = new org.json.JSONObject();
+        try {
+            o.put("type", "object");
+            org.json.JSONObject props = new org.json.JSONObject();
+            for (int k = 0; k < propNames.length; k++) {
+                props.put(propNames[k], stringSchema(propDescs[k]));
+            }
+            o.put("properties", props);
+            if (required != null && required.length > 0) {
+                org.json.JSONArray req = new org.json.JSONArray();
+                for (int k = 0; k < required.length; k++) req.put(required[k]);
+                o.put("required", req);
+            }
+            o.put("additionalProperties", false);
+        } catch (Throwable t) {}
+        return o;
+    }
+
     /**
      * 构造 tools 数组（不直接拼字符串，交由 org.json 序列化）。
      */
