@@ -64,152 +64,113 @@ public class AIClient {
      */
     public static String buildRequestBody(ModelConfig model, java.util.List<ChatMessage> history,
                                           String userMessage, java.util.List<String> images, boolean stream) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"model\":");
-        sb.append(jsonStr(model.modelId));
-        sb.append(",\"messages\":[");
+        // 整个请求体用 org.json 构造：结构上不可能出现少逗号/多括号/转义错误。
+        // 早期版本用手工 append 拼字符串，曾多次产出非法 JSON（服务端 400/422）。
+        org.json.JSONObject root = new org.json.JSONObject();
+        try {
+            root.put("model", model.modelId == null ? "" : model.modelId);
 
-        boolean first = true;
-        if (model.systemPrompt != null && model.systemPrompt.length() > 0) {
-            sb.append("{\"role\":").append(jsonStr("system"))
-              .append(",\"content\":").append(jsonStr(model.systemPrompt)).append("}");
-            first = false;
-        }
-        String manual = ShellManual.systemSuffix();
-        if (manual != null) {
-            if (!first) sb.append(",");
-            sb.append("{\"role\":").append(jsonStr("system"))
-              .append(",\"content\":").append(jsonStr(manual)).append("}");
-            first = false;
-        }
-        if (history != null) {
-            for (ChatMessage m : history) {
-                if (m == null) continue;
-                if (m.isSystem()) continue;
-                if (!first) sb.append(",");
-                sb.append("{\"role\":").append(jsonStr(m.role))
-                  .append(",\"content\":").append(jsonStr(m.content)).append("}");
-                first = false;
+            org.json.JSONArray msgs = new org.json.JSONArray();
+            if (model.systemPrompt != null && model.systemPrompt.length() > 0) {
+                msgs.put(roleContent("system", model.systemPrompt));
             }
-        }
-        if (userMessage != null && userMessage.length() > 0) {
-            if (!first) sb.append(",");
-            sb.append("{\"role\":").append(jsonStr("user"));
-            if (model.multimodal && images != null && images.size() > 0) {
-                sb.append(",\"content\":[");
-                sb.append("{\"type\":\"text\",\"text\":").append(jsonStr(userMessage)).append("}");
-                for (int i = 0; i < images.size(); i++) {
-                    sb.append(",{\"type\":\"image_url\",\"image_url\":{\"url\":")
-                       .append(jsonStr(images.get(i))).append("}}");
+            String manual = ShellManual.systemSuffix();
+            if (manual != null && manual.length() > 0) {
+                msgs.put(roleContent("system", manual));
+            }
+            if (history != null) {
+                for (ChatMessage m : history) {
+                    if (m == null || m.isSystem()) continue;
+                    msgs.put(roleContent(m.role, m.content));
                 }
-                sb.append("]");
-            } else {
-                sb.append(",\"content\":").append(jsonStr(userMessage));
             }
-            sb.append("}");
-        }
-        sb.append("]");
+            if (userMessage != null && userMessage.length() > 0) {
+                org.json.JSONObject um = new org.json.JSONObject();
+                um.put("role", "user");
+                if (model.multimodal && images != null && images.size() > 0) {
+                    org.json.JSONArray parts = new org.json.JSONArray();
+                    org.json.JSONObject tp = new org.json.JSONObject();
+                    tp.put("type", "text");
+                    tp.put("text", userMessage);
+                    parts.put(tp);
+                    for (int i = 0; i < images.size(); i++) {
+                        org.json.JSONObject iu = new org.json.JSONObject();
+                        iu.put("url", images.get(i));
+                        org.json.JSONObject ip = new org.json.JSONObject();
+                        ip.put("type", "image_url");
+                        ip.put("image_url", iu);
+                        parts.put(ip);
+                    }
+                    um.put("content", parts);
+                } else {
+                    um.put("content", userMessage);
+                }
+                msgs.put(um);
+            }
+            root.put("messages", msgs);
 
-        sb.append(",\"temperature\":").append(formatDouble(model.temperature));
-        if (model.maxTokens > 0) {
-            sb.append(",\"max_tokens\":").append(model.maxTokens);
-        }
-        if (stream) {
-            sb.append(",\"stream\":true");
-        }
-        appendOptimizationParams(model, sb);
-        // tools 改用 org.json 构造：手工拼接容易出现结构/转义错误（曾导致服务端 422）
-        appendTools(sb, model.enableToolCalls, isShellToolEnabled());
-        sb.append("}");
-        return sb.toString();
-    }
+            double temp = model.temperature;
+            if (Double.isNaN(temp) || Double.isInfinite(temp)) temp = 0.7;
+            root.put("temperature", temp);
+            if (model.maxTokens > 0) root.put("max_tokens", model.maxTokens);
+            if (stream) root.put("stream", true);
 
-    /** AI 系统命令工具是否可用（仅看总开关，与 WebSearch 开关解耦） */
-    private static boolean isShellToolEnabled() {
-        try {
-            Context ctx = OACApplication.getContext();
-            if (ctx == null) return false;
-            return SettingsManager.get(ctx).isShellEnabled();
+            if (model.shouldShowReasoning()) {
+                root.put("include_reasoning", true);
+                org.json.JSONObject ctk = new org.json.JSONObject();
+                ctk.put("enable_thinking", true);
+                root.put("chat_template_kwargs", ctk);
+            }
+
+            org.json.JSONArray tools = buildToolsArray(model.enableToolCalls, isShellToolEnabled());
+            if (tools != null && tools.length() > 0) root.put("tools", tools);
         } catch (Throwable t) {
-            return false;
+            // 单字段失败不影响整体（org.json 已保证输出仍是合法 JSON）
         }
+        return root.toString();
     }
 
-    /** web_search 工具描述 */
-    private static final String DESC_WEB_SEARCH =
-        "Search the web. YOU MUST USE THIS for current events, versions, releases, news. "
-        + "WRAP KEY TERMS IN QUOTES (e.g. the plain product name). 10 results are returned; "
-        + "identify 1-6 high-value URLs. After search, USE fetch_page to open each high-value URL "
-        + "one by one. Open a URL, check if it has complete info; if not, open the next one. "
-        + "Keep opening until you have enough to answer fully. NEVER answer from snippets alone.";
-
-    /** fetch_page 工具描述 */
-    private static final String DESC_FETCH_PAGE =
-        "Open a URL and read full page content. REQUIRED after web_search. "
-        + "Open high-value URLs from search results one at a time. "
-        + "If one page lacks complete info, open the next. Only answer after finding all needed facts.";
-
-    /** run_shell 工具描述 */
-    private static final String DESC_RUN_SHELL =
-        "Run a shell command on the local Android device as root (via su). "
-        + "Use it to inspect or tune THIS device: getprop, dumpsys, cat /proc/..., ps, top, df, "
-        + "logcat -d, settings get, pm list, lsmod, cat /sys/... . "
-        + "Commands are risk-graded: read-only commands run immediately; commands that change state "
-        + "need the user to confirm a dialog; dangerous commands (reboot, rm -rf, dd, mkfs, "
-        + "pm uninstall/disable, writing to /system, setprop persist.*) are blocked unless released in settings. "
-        + "Rules: (1) Prefer read-only probes; gather facts before changing anything. "
-        + "(2) One change per command; never chain unrelated modifications. "
-        + "(3) If the result says refused or cancelled, do NOT retry; explain to the user instead. "
-        + "(4) Output is truncated, so keep commands narrow. "
-        + "(5) Explain what you change and why, and prefer reversible changes.";
-
-    private static org.json.JSONObject stringSchema(String desc) {
+    /** 构造一条 {role, content} 消息 */
+    private static org.json.JSONObject roleContent(String role, String content) {
         org.json.JSONObject o = new org.json.JSONObject();
         try {
-            o.put("type", "string");
-            o.put("description", desc);
-        } catch (Throwable t) {}
-        return o;
-    }
-
-    private static org.json.JSONObject functionTool(String name, String desc, org.json.JSONObject params) {
-        org.json.JSONObject tool = new org.json.JSONObject();
-        org.json.JSONObject fn = new org.json.JSONObject();
-        try {
-            fn.put("name", name);
-            fn.put("description", desc);
-            if (params != null) fn.put("parameters", params);
-            tool.put("type", "function");
-            tool.put("function", fn);
-        } catch (Throwable t) {}
-        return tool;
-    }
-
-    private static org.json.JSONObject objectSchema(String[] propNames, String[] propDescs, String[] required) {
-        org.json.JSONObject o = new org.json.JSONObject();
-        try {
-            o.put("type", "object");
-            org.json.JSONObject props = new org.json.JSONObject();
-            for (int k = 0; k < propNames.length; k++) {
-                props.put(propNames[k], stringSchema(propDescs[k]));
-            }
-            o.put("properties", props);
-            if (required != null && required.length > 0) {
-                org.json.JSONArray req = new org.json.JSONArray();
-                for (int k = 0; k < required.length; k++) req.put(required[k]);
-                o.put("required", req);
-            }
-            o.put("additionalProperties", false);
+            o.put("role", (role == null || role.length() == 0) ? "user" : role);
+            o.put("content", content == null ? "" : content);
         } catch (Throwable t) {}
         return o;
     }
 
     /**
-     * 追加 tools 数组。全部用 org.json 对象构造，结构上不可能出现 null / 少括号 / 转义错误。
+     * 把用户填的 API 地址补全成真正的接口地址。
+     *
+     * 千问 token plan 这类平台的地址是 https://host/compatible-mode/v1，
+     * 这是「基础地址」，真正的接口还要再加 /chat/completions。
+     * 用户填 "…/v1" 或 "…/v1/" 时自动补全，已带具体路径的不动。
      */
-    private static void appendTools(StringBuilder sb, boolean webTools, boolean shellTool) {
+    public static String normalizeApiUrl(String url) {
+        if (url == null) return "";
+        String u = url.trim();
+        if (u.length() == 0) return u;
+        String lower = u.toLowerCase();
+        if (lower.indexOf("/chat/completions") >= 0
+                || lower.indexOf("/completions") >= 0
+                || lower.indexOf("/messages") >= 0
+                || lower.indexOf("/generatecontent") >= 0
+                || lower.indexOf("/responses") >= 0) {
+            return u;
+        }
+        while (u.endsWith("/")) u = u.substring(0, u.length() - 1);
+        lower = u.toLowerCase();
+        if (lower.endsWith("/v1")) return u + "/chat/completions";
+        return u;
+    }
+
+    /**
+     * 构造 tools 数组（不直接拼字符串，交由 org.json 序列化）。
+     */
+    private static org.json.JSONArray buildToolsArray(boolean webTools, boolean shellTool) {
+        org.json.JSONArray arr = new org.json.JSONArray();
         try {
-            org.json.JSONArray arr = new org.json.JSONArray();
             if (webTools) {
                 arr.put(functionTool("web_search", DESC_WEB_SEARCH,
                         objectSchema(new String[]{"query"},
@@ -229,11 +190,10 @@ public class AIClient {
                                         "Short reason shown to the user in the confirm dialog"},
                                 new String[]{"command"})));
             }
-            if (arr.length() == 0) return;
-            sb.append(",\"tools\":").append(arr.toString());
         } catch (Throwable t) {
-            // 构造失败就不带工具，宁可没有工具也不要发非法 JSON
+            // 构造失败就返回已有的部分，调用方会按长度决定是否带上
         }
+        return arr;
     }
 
     private static void appendOptimizationParams(ModelConfig model, StringBuilder sb) {
@@ -260,7 +220,7 @@ public class AIClient {
         // 又能在真的非法时报出长度与位置，并落盘请求体便于排查。
         body = normalizeBodyOrThrow(ctx, body);
         NetRequest req = new NetRequest();
-        req.url = model.apiUrl;
+        req.url = normalizeApiUrl(model.apiUrl);
         req.method = "POST";
         req.contentType = "application/json; charset=utf-8";
         req.body = body.getBytes("UTF-8");
@@ -291,6 +251,19 @@ public class AIClient {
         } catch (Throwable t) {
             err = t.getClass().getSimpleName()
                 + (t.getMessage() == null ? "" : (": " + t.getMessage()));
+            // 附带出错位置附近的原文，便于一眼看出是结构问题还是转义问题
+            try {
+                String m = t.getMessage();
+                if (m != null) {
+                    int k = m.indexOf(" at ");
+                    if (k > 0) {
+                        int p = Integer.parseInt(m.substring(k + 4).trim());
+                        int from = Math.max(0, p - 120);
+                        int to = Math.min(body.length(), p + 60);
+                        err += "\n附近原文: " + body.substring(from, to).replace("\n", "\\n");
+                    }
+                }
+            } catch (Throwable ignore) {}
         }
 
         try {

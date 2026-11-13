@@ -261,7 +261,7 @@ public class AIRequest {
 
         // ==================== 统一工具循环 ====================
         // 一轮可以包含多个调用（原生 tool_calls 或正文里的 DSML 文本调用）
-        StringBuilder toolHistory = new StringBuilder();
+        org.json.JSONArray toolHistory = new org.json.JSONArray();
         int toolRounds = 0;
         final int MAX_TOOL_ROUNDS = 16;
         java.util.List<DsmlToolParser.Call> pending = null;
@@ -328,8 +328,12 @@ public class AIRequest {
                 // DSML 是文本协议：模型只认"上一条 assistant 说了什么 + 现在的结果"，
                 // 用 OpenAI 的 tool_calls/tool 结构它只读得到第一条结果。
                 // 这里把全部结果合并成一条 user 消息回传。
-                toolHistory.append(",{\"role\":\"assistant\",\"content\":")
-                    .append(jsonStr("我调用了 " + calls.size() + " 个命令。")).append("}");
+                org.json.JSONObject asMsg = new org.json.JSONObject();
+                try {
+                    asMsg.put("role", "assistant");
+                    asMsg.put("content", "我调用了 " + calls.size() + " 个命令。");
+                } catch (Throwable t) {}
+                toolHistory.put(asMsg);
                 StringBuilder rb = new StringBuilder();
                 rb.append("以下是这些命令的真实执行结果（输出过长已截断）。请基于这些真实数据回答用户，不要再重复执行已经成功的命令：\n");
                 for (int i = 0; i < calls.size(); i++) {
@@ -340,29 +344,43 @@ public class AIRequest {
                     rb.append("\n【").append(i + 1).append("】").append(cmd).append("\n")
                       .append(r == null ? "(无输出)" : r).append("\n");
                 }
-                toolHistory.append(",{\"role\":\"user\",\"content\":")
-                    .append(jsonStr(rb.toString())).append("}");
+                org.json.JSONObject userMsgObj = new org.json.JSONObject();
+                try {
+                    userMsgObj.put("role", "user");
+                    userMsgObj.put("content", rb.toString());
+                } catch (Throwable t) {}
+                toolHistory.put(userMsgObj);
             } else {
                 // 原生 tool_calls：标准 OpenAI 结构
-                toolHistory.append(",{\"role\":\"assistant\"");
-                if (roundReasoning.length() > 0) {
-                    toolHistory.append(",\"reasoning_content\":").append(jsonStr(roundReasoning.toString()));
-                }
-                toolHistory.append(",\"tool_calls\":[");
+                org.json.JSONObject natMsg = new org.json.JSONObject();
+                org.json.JSONArray natCalls = new org.json.JSONArray();
+                try {
+                    natMsg.put("role", "assistant");
+                    if (roundReasoning.length() > 0) {
+                        natMsg.put("reasoning_content", roundReasoning.toString());
+                    }
+                    for (int i = 0; i < calls.size(); i++) {
+                        DsmlToolParser.Call c = calls.get(i);
+                        org.json.JSONObject fn = new org.json.JSONObject();
+                        fn.put("name", c.name);
+                        fn.put("arguments", c.args == null ? "{}" : c.args);
+                        org.json.JSONObject one = new org.json.JSONObject();
+                        one.put("id", callId(toolRounds, i));
+                        one.put("type", "function");
+                        one.put("function", fn);
+                        natCalls.put(one);
+                    }
+                    natMsg.put("tool_calls", natCalls);
+                } catch (Throwable t) {}
+                toolHistory.put(natMsg);
                 for (int i = 0; i < calls.size(); i++) {
-                    DsmlToolParser.Call c = calls.get(i);
-                    if (i > 0) toolHistory.append(",");
-                    toolHistory.append("{\"id\":").append(jsonStr(callId(toolRounds, i)))
-                        .append(",\"type\":\"function\"")
-                        .append(",\"function\":{\"name\":").append(jsonStr(c.name))
-                        .append(",\"arguments\":").append(jsonStr(c.args)).append("}}");
-                }
-                toolHistory.append("]}");
-                for (int i = 0; i < calls.size(); i++) {
-                    DsmlToolParser.Call c = calls.get(i);
-                    toolHistory.append(",{\"role\":\"tool\",\"tool_call_id\":")
-                        .append(jsonStr(callId(toolRounds, i)))
-                        .append(",\"content\":").append(jsonStr(results.get(i))).append("}");
+                    org.json.JSONObject toolMsg = new org.json.JSONObject();
+                    try {
+                        toolMsg.put("role", "tool");
+                        toolMsg.put("tool_call_id", callId(toolRounds, i));
+                        toolMsg.put("content", results.get(i) == null ? "" : results.get(i));
+                    } catch (Throwable t) {}
+                    toolHistory.put(toolMsg);
                 }
             }
             roundReasoning.setLength(0);
@@ -379,7 +397,7 @@ public class AIRequest {
             // 4) 续问（不带 tools，避免死循环）
             final int lenBeforeRound = fullContent.length();
             String followUpBody = buildFollowUpBody(mModel, mHistory, mUserMessage, mImages,
-                    toolHistory.toString(), true);
+                    toolHistory, true);
             AIClient.Connection conn2 = AIClient.connect(mModel, followUpBody);
             mConn = conn2;
             if (mCancelled) { conn2.disconnect(); return; }
@@ -684,69 +702,91 @@ public class AIRequest {
      * 构造 Tool Call 的二次请求 body。
      * 在原消息列表后追加 assistant(tool_calls) + tool(result)，不加 tools 数组。
      */
+    /**
+     * 构造工具续问的请求体。
+     *
+     * toolHistory 现在是 JSONArray（真正的结构化消息），不再拼字符串，
+     * 从根本上避免少逗号/多括号/转义错误。
+     */
     private static String buildFollowUpBody(ModelConfig model, List<ChatMessage> history,
-            String userMessage, List<String> images, String toolHistory, boolean stream) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\"model\":");
-        sb.append(jsonStr(model.modelId));
-        sb.append(",\"messages\":[");
-        boolean first = true;
-        if (model.systemPrompt != null && model.systemPrompt.length() > 0) {
-            sb.append("{\"role\":").append(jsonStr("system"))
-              .append(",\"content\":").append(jsonStr(model.systemPrompt)).append("}");
-            first = false;
-        }
-        String manual = ShellManual.systemSuffix();
-        if (manual != null) {
-            if (!first) sb.append(",");
-            sb.append("{\"role\":").append(jsonStr("system"))
-              .append(",\"content\":").append(jsonStr(manual)).append("}");
-            first = false;
-        }
-        if (history != null) {
-            for (ChatMessage m : history) {
-                if (m == null || m.isSystem()) continue;
-                if (!first) sb.append(",");
-                sb.append("{\"role\":").append(jsonStr(m.role))
-                  .append(",\"content\":").append(jsonStr(m.content)).append("}");
-                first = false;
+            String userMessage, List<String> images, org.json.JSONArray toolHistory, boolean stream) {
+        org.json.JSONObject root = new org.json.JSONObject();
+        try {
+            root.put("model", model.modelId == null ? "" : model.modelId);
+            org.json.JSONArray msgs = new org.json.JSONArray();
+
+            if (model.systemPrompt != null && model.systemPrompt.length() > 0) {
+                msgs.put(roleContent("system", model.systemPrompt));
             }
-        }
-        if (userMessage != null && userMessage.length() > 0) {
-            if (!first) sb.append(",");
-            sb.append("{\"role\":").append(jsonStr("user"));
-            if (images != null && images.size() > 0) {
-                sb.append(",\"content\":[");
-                sb.append("{\"type\":\"text\",\"text\":").append(jsonStr(userMessage)).append("}");
-                for (String img : images) {
-                    sb.append(",{\"type\":\"image_url\",\"image_url\":{\"url\":")
-                      .append(jsonStr(img)).append("}}");
+            String manual = ShellManual.systemSuffix();
+            if (manual != null && manual.length() > 0) {
+                msgs.put(roleContent("system", manual));
+            }
+            if (history != null) {
+                for (ChatMessage m : history) {
+                    if (m == null || m.isSystem()) continue;
+                    msgs.put(roleContent(m.role, m.content));
                 }
-                sb.append("]");
-            } else {
-                sb.append(",\"content\":").append(jsonStr(userMessage));
             }
-            sb.append("}");
-            first = false;
+            if (userMessage != null && userMessage.length() > 0) {
+                org.json.JSONObject um = new org.json.JSONObject();
+                um.put("role", "user");
+                if (images != null && images.size() > 0) {
+                    org.json.JSONArray parts = new org.json.JSONArray();
+                    org.json.JSONObject tp = new org.json.JSONObject();
+                    tp.put("type", "text");
+                    tp.put("text", userMessage);
+                    parts.put(tp);
+                    for (int i = 0; i < images.size(); i++) {
+                        org.json.JSONObject iu = new org.json.JSONObject();
+                        iu.put("url", images.get(i));
+                        org.json.JSONObject ip = new org.json.JSONObject();
+                        ip.put("type", "image_url");
+                        ip.put("image_url", iu);
+                        parts.put(ip);
+                    }
+                    um.put("content", parts);
+                } else {
+                    um.put("content", userMessage);
+                }
+                msgs.put(um);
+            }
+
+            // 追加工具调用历史（结构化）
+            if (toolHistory != null) {
+                for (int i = 0; i < toolHistory.length(); i++) {
+                    Object o = null;
+                    try { o = toolHistory.get(i); } catch (Throwable t) {}
+                    if (o != null) msgs.put(o);
+                }
+            }
+
+            root.put("messages", msgs);
+            double temp = model.temperature;
+            if (Double.isNaN(temp) || Double.isInfinite(temp)) temp = 0.7;
+            root.put("temperature", temp);
+            if (model.maxTokens > 0) root.put("max_tokens", model.maxTokens);
+            if (model.shouldShowReasoning()) {
+                root.put("include_reasoning", true);
+                org.json.JSONObject ctk = new org.json.JSONObject();
+                ctk.put("enable_thinking", true);
+                root.put("chat_template_kwargs", ctk);
+            }
+            if (stream) root.put("stream", true);
+        } catch (Throwable t) {
+            // org.json 保证输出仍是合法 JSON
         }
-        // 追加所有工具调用历史
-        if (toolHistory != null && toolHistory.length() > 0) {
-            sb.append(toolHistory);
-        }
-        sb.append("]");
-        sb.append(",\"temperature\":").append(formatDouble(model.temperature));
-        if (model.maxTokens > 0) {
-            sb.append(",\"max_tokens\":").append(model.maxTokens);
-        }
-        if (model.shouldShowReasoning()) {
-            sb.append(",\"include_reasoning\":true");
-            sb.append(",\"chat_template_kwargs\":{\"enable_thinking\":true}");
-        }
-        if (stream) {
-            sb.append(",\"stream\":true");
-        }
-        sb.append("}");
-        return sb.toString();
+        return root.toString();
+    }
+
+    /** 构造一条 {role, content} 消息 */
+    private static org.json.JSONObject roleContent(String role, String content) {
+        org.json.JSONObject o = new org.json.JSONObject();
+        try {
+            o.put("role", (role == null || role.length() == 0) ? "user" : role);
+            o.put("content", content == null ? "" : content);
+        } catch (Throwable t) {}
+        return o;
     }
 
     private static String jsonStr(String s) {
@@ -827,23 +867,36 @@ public class AIRequest {
 
         // 非流式 tool_calls 处理：与流式类似但只有一轮
         if (d.isToolCall) {
-            String toolArgs = (d.toolCallArgs != null) ? d.toolCallArgs : "";
+            String toolArgs = (d.toolCallArgs != null) ? d.toolCallArgs : "{}";
             String toolResult = executeToolCall(d.toolCallName, toolArgs);
-            StringBuilder th = new StringBuilder();
-            th.append(",{\"role\":\"assistant\"");
-            if (d.hasReasoning()) {
-                th.append(",\"reasoning_content\":").append(jsonStr(d.reasoning));
-            }
-            th.append(",\"tool_calls\":[{")
-              .append("\"id\":").append(jsonStr(d.toolCallId))
-              .append(",\"type\":\"function\"")
-              .append(",\"function\":{\"name\":").append(jsonStr(d.toolCallName))
-              .append(",\"arguments\":").append(jsonStr(toolArgs))
-              .append("}}]}")
-              .append(",{\"role\":\"tool\",\"tool_call_id\":").append(jsonStr(d.toolCallId))
-              .append(",\"content\":").append(jsonStr(toolResult)).append("}");
-            String followUpBody = buildFollowUpBody(mModel, mHistory, mUserMessage, mImages,
-                    th.toString(), false);
+
+            org.json.JSONArray th = new org.json.JSONArray();
+            org.json.JSONObject asMsg = new org.json.JSONObject();
+            org.json.JSONArray asCalls = new org.json.JSONArray();
+            try {
+                asMsg.put("role", "assistant");
+                if (d.hasReasoning()) asMsg.put("reasoning_content", d.reasoning);
+                org.json.JSONObject fn = new org.json.JSONObject();
+                fn.put("name", d.toolCallName == null ? "" : d.toolCallName);
+                fn.put("arguments", toolArgs);
+                org.json.JSONObject one = new org.json.JSONObject();
+                one.put("id", d.toolCallId == null ? "call_1_0" : d.toolCallId);
+                one.put("type", "function");
+                one.put("function", fn);
+                asCalls.put(one);
+                asMsg.put("tool_calls", asCalls);
+            } catch (Throwable t) {}
+            th.put(asMsg);
+
+            org.json.JSONObject toolMsg = new org.json.JSONObject();
+            try {
+                toolMsg.put("role", "tool");
+                toolMsg.put("tool_call_id", d.toolCallId == null ? "call_1_0" : d.toolCallId);
+                toolMsg.put("content", toolResult == null ? "" : toolResult);
+            } catch (Throwable t) {}
+            th.put(toolMsg);
+
+            String followUpBody = buildFollowUpBody(mModel, mHistory, mUserMessage, mImages, th, false);
             AIClient.Connection conn2 = AIClient.connect(mModel, followUpBody);
             mConn = conn2;
             if (mCancelled) { conn2.disconnect(); return; }
@@ -858,6 +911,10 @@ public class AIRequest {
             d = AIClient.readFullResponseDelta(conn2);
             conn2.disconnect();
             if (mCancelled) return;
+            // 续问的正文也可能带 DSML，过滤掉
+            if (d.hasContent() && d.content.indexOf("|DSML|") >= 0) {
+                d.content = stripDsml(d.content);
+            }
         }
 
         if (d.hasContent()) {
@@ -866,7 +923,6 @@ public class AIRequest {
         if (d.hasReasoning()) {
             mHandler.obtainMessage(MSG_REASONING_DELTA, d.reasoning).sendToTarget();
         }
-        // 兜底
         String content = d.content;
         if ((content == null || content.length() == 0) && d.isToolCall) {
             content = "(model returned no text after using tools)";
