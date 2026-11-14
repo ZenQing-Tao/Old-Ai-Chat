@@ -959,8 +959,7 @@ public class MainActivity extends Activity {
         }
         try {
             final boolean[] withReason = new boolean[]{false};
-            final String[] items = new String[]{getString(R.string.dlg_export_reason) + "
-"
+            final String[] items = new String[]{getString(R.string.dlg_export_reason) + "\n"
                     + getString(R.string.dlg_export_hint)};
             new AlertDialog.Builder(this)
                     .setTitle(R.string.dlg_export_title)
