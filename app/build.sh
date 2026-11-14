@@ -25,7 +25,7 @@ KS="$ROOT/oac.keystore"
 echo "==> SDK  : $SDKDIR"
 echo "==> PLAT : $PLAT"
 echo "==> BT   : $BT"
-[ -x "$BT/aapt" ] || { echo "ERROR: aapt not found in $BT"; exit 1; }
+[ -x "$BT/aapt" ] || { echo "ERROR: aapt not found or not executable in $BT"; ls -l "$BT/aapt" 2>&1 || true; exit 1; }
 
 echo "==> clean"
 rm -rf "$ROOT/gen" "$ROOT/obj" "$ROOT/bin"

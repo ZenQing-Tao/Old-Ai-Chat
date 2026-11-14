@@ -23,28 +23,35 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/android-sdk
-          key: android-sdk-manual-bt3030-plat28-v2
+          key: android-sdk-manual-bt3030-plat28-v3
 
       # 不使用 sdkmanager：新版 cmdline-tools 需要 JDK11+，在 JDK8 环境下会秒退
       - name: Install Android SDK (direct download, no sdkmanager)
         run: |
-          set -euo pipefail
+          set -uo pipefail
           SDK="$HOME/android-sdk"
           mkdir -p "$SDK/build-tools" "$SDK/platforms" /tmp/dl
 
+          # 从缓存恢复的文件可能丢可执行位，先无条件修一遍
+          if [ -d "$SDK/build-tools/30.0.3" ]; then
+            chmod -R +x "$SDK/build-tools/30.0.3" 2>/dev/null || true
+          fi
+
           if [ ! -x "$SDK/build-tools/30.0.3/aapt" ]; then
-            echo "==> downloading build-tools 30.0.3"
+            echo "==> build-tools 30.0.3 not usable, downloading"
+            rm -rf /tmp/dl/bt "$SDK/build-tools/30.0.3"
             curl -fsSL --retry 3 -o /tmp/dl/bt.zip \
               https://dl.google.com/android/repository/build-tools_r30.0.3-linux.zip
             unzip -q /tmp/dl/bt.zip -d /tmp/dl/bt
             AAPT=$(find /tmp/dl/bt -name aapt -type f | head -1)
             echo "aapt found at: $AAPT"
             mv "$(dirname "$AAPT")" "$SDK/build-tools/30.0.3"
-            chmod +x "$SDK/build-tools/30.0.3/"* || true
+            chmod -R +x "$SDK/build-tools/30.0.3" || true
           fi
 
           if [ ! -f "$SDK/platforms/android-28/android.jar" ]; then
-            echo "==> downloading platform 28"
+            echo "==> platform 28 missing, downloading"
+            rm -rf /tmp/dl/pf "$SDK/platforms/android-28"
             curl -fsSL --retry 3 -o /tmp/dl/pf.zip \
               https://dl.google.com/android/repository/platform-28_r06.zip
             unzip -q /tmp/dl/pf.zip -d /tmp/dl/pf
@@ -53,6 +60,23 @@ jobs:
             mv "$(dirname "$JAR")" "$SDK/platforms/android-28"
           fi
 
+          # 最终自检：任何一项不满足都直接失败并给出明确原因
+          echo "==> verify SDK layout"
+          if [ ! -x "$SDK/build-tools/30.0.3/aapt" ]; then
+            echo "::error title=SDK broken::aapt missing at $SDK/build-tools/30.0.3/aapt"
+            ls -l "$SDK/build-tools/30.0.3" | head -20 || true
+            exit 1
+          fi
+          if [ ! -f "$SDK/platforms/android-28/android.jar" ]; then
+            echo "::error title=SDK broken::android.jar missing"
+            ls -l "$SDK/platforms" || true
+            exit 1
+          fi
+          "$SDK/build-tools/30.0.3/aapt" version || {
+            echo "::error title=SDK broken::aapt cannot run"
+            exit 1
+          }
+
           echo "sdk.dir=$SDK" > app/local.properties
           java -version 2>&1 | head -3
 
@@ -60,10 +84,35 @@ jobs:
         run: |
           set -uo pipefail
           chmod +x app/build.sh
-          bash app/build.sh 2>&1 | tee /tmp/build.log
-          test ${PIPESTATUS[0]} -eq 0
+          if bash app/build.sh > /tmp/build.log 2>&1; then
+            echo "==> BUILD OK"
+            tail -15 /tmp/build.log
+            exit 0
+          fi
 
-      # 编译失败也把完整日志传上来，避免只能靠注解猜错误
+          echo "===== BUILD FAILED ====="
+          echo "log size: $(wc -c < /tmp/build.log) bytes, $(wc -l < /tmp/build.log) lines"
+          echo "----- full log -----"
+          cat /tmp/build.log
+          echo "----- end log -----"
+
+          # 把真实错误转成 GitHub 注解（注解公开可读，不需要登录下载 artifact）
+          KEY='error:|ERROR|Exception|FAILED|No resource|not found|cannot find|unable|invalid'
+          if grep -q -a -E "$KEY" /tmp/build.log; then
+            grep -a -E "$KEY" /tmp/build.log | head -15 | while IFS= read -r line; do
+              safe=$(printf '%s' "$line" | tr -d '\r' | cut -c1-800)
+              echo "::error title=build-error::$safe"
+            done
+          else
+            # 没匹配到关键字：把全部内容逐行转注解，保证能看到
+            head -30 /tmp/build.log | while IFS= read -r line; do
+              safe=$(printf '%s' "$line" | tr -d '\r' | cut -c1-800)
+              [ -n "$safe" ] && echo "::error title=build-log::$safe"
+            done
+          fi
+          exit 1
+
+      # 编译失败也把完整日志传上来
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
