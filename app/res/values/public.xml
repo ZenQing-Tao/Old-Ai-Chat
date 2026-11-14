@@ -99,6 +99,7 @@
     <public type="id" name="btn_drawer_new" id="0x7f05002f" />
     <public type="id" name="btn_drawer_clear" id="0x7f050030" />
     <public type="id" name="btn_drawer_settings" id="0x7f050031" />
+    <public type="id" name="btn_drawer_export" id="0x7f050040" />
     <public type="id" name="tv_conv_title" id="0x7f050032" />
     <public type="id" name="tv_conv_preview" id="0x7f050033" />
     <public type="id" name="btn_conv_delete" id="0x7f050034" />

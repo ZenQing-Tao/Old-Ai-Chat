@@ -1,0 +1,11 @@
+# JVM 崩溃日志（构建机/本地产物，不属于源码）
+hs_err_pid*.log
+replay_pid*.log
+*.hprof
+
+# 构建产物
+app/obj/
+app/bin/
+app/gen/
+app/local.properties
+out/

@@ -50,6 +50,7 @@
     <item type="id" name="btn_drawer_new" />
     <item type="id" name="btn_drawer_clear" />
     <item type="id" name="btn_drawer_settings" />
+    <item type="id" name="btn_drawer_export" />
     <item type="id" name="tv_conv_title" />
     <item type="id" name="tv_conv_preview" />
     <item type="id" name="btn_conv_delete" />
