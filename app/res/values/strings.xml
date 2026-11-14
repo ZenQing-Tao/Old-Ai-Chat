@@ -67,7 +67,7 @@
     <string name="set_about">关于</string>
     <string name="model_picker_title">选择模型</string>
     <string name="set_about_text">"软件名称：Old AI Chat 开源发布版
-当前版本：1.7-root.8（versionCode 17）
+当前版本：1.7-root.9（versionCode 18）
 
 本版扩展：AI 系统命令（root），命令分一般 / 中危 / 高危三档管控
 
@@ -183,4 +183,11 @@ settings get</string>
     <string name="shell_status_fail">未取得 root，命令将以普通权限执行</string>
     <string name="set_shell_enabled_toast">已开启 AI 系统命令，重新进入对话后工具生效</string>
     <string name="set_shell_high_toast">已放行高危命令，请确认你清楚风险</string>
+    <string name="action_export">导出</string>
+    <string name="dlg_export_title">导出对话</string>
+    <string name="dlg_export_reason">包含思考内容</string>
+    <string name="dlg_export_hint">将保存到 Download 目录</string>
+    <string name="msg_export_ok">已导出 %1$s
+共 %2$d 条消息</string>
+    <string name="msg_export_fail">导出失败：%1$s</string>
 </resources>

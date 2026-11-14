@@ -597,12 +597,14 @@ public class AIRequest {
 
     /** 从工具参数里取出命令/查询文本（用于回传给模型和摘要展示） */
     private static String cmdOf(String args) {
+        // 先用兼容解析器（能剥 arguments 嵌套、换键名、数组），保证摘要不显示空命令
+        String v = pickCommand(args);
+        if (v != null && v.length() > 0) return v.replace("\r", "").trim();
         try {
             org.json.JSONObject o = new org.json.JSONObject(args == null ? "{}" : args);
-            String v = o.optString("command", "");
-            if (v == null || v.length() == 0) v = o.optString("query", "");
-            if (v == null || v.length() == 0) v = o.optString("url", "");
-            return v == null ? "" : v.replace("\n", " ").trim();
+            String q = o.optString("query", "");
+            if (q == null || q.length() == 0) q = o.optString("url", "");
+            return q == null ? "" : q.trim();
         } catch (Throwable t) {
             return args == null ? "" : args;
         }
@@ -610,13 +612,7 @@ public class AIRequest {
 
     /** 把一次工具调用压缩成一行摘要，用于模型没写正文时兜底展示 */
     private static void appendToolSummary(StringBuilder sb, String name, String args, String result) {
-        String cmd = "";
-        try {
-            org.json.JSONObject o = new org.json.JSONObject(args == null ? "{}" : args);
-            cmd = o.optString("command", o.optString("query", o.optString("url", "")));
-        } catch (Throwable t) {
-            cmd = args == null ? "" : args;
-        }
+        String cmd = cmdOf(args);
         cmd = cmd.replace("\n", " ").trim();
         if (cmd.length() > 160) cmd = cmd.substring(0, 160) + "…";
 
@@ -644,6 +640,145 @@ public class AIRequest {
         }
     }
 
+    /**
+     * 从各种奇形怪状的参数里把真正的命令抠出来。
+     *
+     * 实测千问/DeepSeek 会发出这些形态（都是同一个 run_shell）：
+     *   {"command":"ls"}                                   ← 正常
+     *   {"arguments":"{\"command\":\"ls\"}"}               ← 序列化成字符串又套一层
+     *   {"arguments":{"command":"ls"}}                     ← 套一层对象
+     *   {"cmd":"ls"} / {"shell":"ls"} / {"script":"ls"}    ← 换键名
+     *   {"commands":[{"command":"ls"},{"command":"id"}]}   ← 传成数组
+     *   {"arguments":{"commands":[...]}}
+     * 只认顶层 "command" 会导致命令为空，模型就会一直重试到轮数用光。
+     */
+    private static String pickCommand(String argsJson) {
+        if (argsJson == null) return "";
+        String s = argsJson.trim();
+        if (s.length() == 0) return "";
+        // 最多剥 4 层，防止异常输入死循环
+        for (int depth = 0; depth < 4; depth++) {
+            if (s.startsWith("{")) {
+                org.json.JSONObject o;
+                try {
+                    o = new org.json.JSONObject(s);
+                } catch (Throwable t) {
+                    return "";
+                }
+                // 1) 直接就是命令字段
+                String direct = firstString(o,
+                        new String[]{"command", "cmd", "shell", "script", "code", "input", "bash", "sh"});
+                if (direct.length() > 0) return direct;
+                // 2) commands / calls 数组：逐项取命令，拼成一条（用 && 串联更符合"一次执行"的语义）
+                org.json.JSONArray arr = optArray(o, new String[]{"commands", "calls", "cmds", "list"});
+                if (arr != null) {
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < arr.length(); i++) {
+                        Object it = arr.opt(i);
+                        String one = "";
+                        if (it instanceof String) {
+                            one = ((String) it).trim();
+                        } else if (it instanceof org.json.JSONObject) {
+                            one = pickCommand(it.toString());
+                        }
+                        if (one.length() == 0) continue;
+                        if (sb.length() > 0) sb.append("\n");
+                        sb.append(one);
+                    }
+                    if (sb.length() > 0) return sb.toString();
+                }
+                // 3) 再剥一层：arguments / args / params / payload / body
+                String inner = firstString(o, new String[]{"arguments"});
+                if (inner.length() > 0) {
+                    s = inner.trim();
+                    continue;
+                }
+                org.json.JSONObject innerObj = optObject(o, new String[]{"arguments", "args", "params", "payload", "body"});
+                if (innerObj != null) {
+                    s = innerObj.toString();
+                    continue;
+                }
+                return "";
+            }
+            if (s.startsWith("[")) {
+                org.json.JSONArray arr;
+                try {
+                    arr = new org.json.JSONArray(s);
+                } catch (Throwable t) {
+                    return "";
+                }
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < arr.length(); i++) {
+                    Object it = arr.opt(i);
+                    String one = "";
+                    if (it instanceof String) {
+                        one = ((String) it).trim();
+                    } else if (it instanceof org.json.JSONObject) {
+                        one = pickCommand(it.toString());
+                    }
+                    if (one.length() == 0) continue;
+                    if (sb.length() > 0) sb.append("\n");
+                    sb.append(one);
+                }
+                return sb.toString();
+            }
+            // 裸字符串：本身就是命令
+            if (s.startsWith("\"")) {
+                try {
+                    s = new org.json.JSONArray("[" + s + "]").getString(0);
+                } catch (Throwable t) {
+                    return s;
+                }
+                continue;
+            }
+            return s;
+        }
+        return "";
+    }
+
+    /** 依次尝试多个 key，返回第一个非空字符串值（对象/数组会被序列化） */
+    private static String firstString(org.json.JSONObject o, String[] keys) {
+        for (int i = 0; i < keys.length; i++) {
+            if (!o.has(keys[i])) continue;
+            Object v = o.opt(keys[i]);
+            if (v == null || v == org.json.JSONObject.NULL) continue;
+            if (v instanceof String) {
+                String t = ((String) v).trim();
+                if (t.length() > 0) return t;
+            } else if (v instanceof org.json.JSONObject) {
+                // 形如 "arguments": {...}，交给上层继续剥
+                return ((org.json.JSONObject) v).toString();
+            } else if (v instanceof org.json.JSONArray) {
+                return ((org.json.JSONArray) v).toString();
+            }
+        }
+        return "";
+    }
+
+    private static org.json.JSONArray optArray(org.json.JSONObject o, String[] keys) {
+        for (int i = 0; i < keys.length; i++) {
+            if (!o.has(keys[i])) continue;
+            Object v = o.opt(keys[i]);
+            if (v instanceof org.json.JSONArray) return (org.json.JSONArray) v;
+            if (v instanceof String) {
+                String t = ((String) v).trim();
+                if (t.startsWith("[")) {
+                    try { return new org.json.JSONArray(t); } catch (Throwable x) { }
+                }
+            }
+        }
+        return null;
+    }
+
+    private static org.json.JSONObject optObject(org.json.JSONObject o, String[] keys) {
+        for (int i = 0; i < keys.length; i++) {
+            if (!o.has(keys[i])) continue;
+            Object v = o.opt(keys[i]);
+            if (v instanceof org.json.JSONObject) return (org.json.JSONObject) v;
+        }
+        return null;
+    }
+
     /** 执行具体工具调用：web_search 或 fetch_page */
     private static String executeToolCall(String toolName, String argsJson) {
         if ("web_search".equals(toolName)) {
@@ -660,13 +795,12 @@ public class AIRequest {
                     "yyyy-MM-dd HH:mm:ss EEEE", java.util.Locale.getDefault());
             return sdf.format(new java.util.Date());
         } else if ("run_shell".equals(toolName)) {
-            String command = "";
-            try {
-                org.json.JSONObject json = new org.json.JSONObject(
-                        (argsJson == null || argsJson.length() == 0) ? "{}" : argsJson);
-                command = json.optString("command", "");
-            } catch (Exception e) {
-                return "(shell error: 参数解析失败 " + e.getMessage() + ")";
+            String command = pickCommand(argsJson);
+            if (command.length() == 0) {
+                return "(shell error: 未能从参数里取到命令。正确格式是 "
+                    + "{\"command\":\"要执行的单行命令\",\"purpose\":\"说明\"}，"
+                    + "不要把 command 再包进 arguments，也不要传数组。"
+                    + "收到的是: " + head(argsJson, 300) + ")";
             }
             return ShellGate.run(command);
         }

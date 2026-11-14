@@ -728,6 +728,11 @@ public class MainActivity extends Activity {
                 }
             }
         });
+        bindDrawerButton(R.id.btn_drawer_export, new Runnable() {
+            @Override public void run() {
+                showExportDialog();
+            }
+        });
         bindDrawerButton(R.id.btn_drawer_settings, new Runnable() {
             @Override public void run() {
                 closeDrawer();
@@ -939,6 +944,64 @@ public class MainActivity extends Activity {
             }
         } catch (Throwable t) {
             toast(safeMsg(t));
+        }
+    }
+
+    /**
+     * 导出当前对话。
+     * 直接读数据库，内容与界面一致；可勾选是否附带思考内容。
+     */
+    private void showExportDialog() {
+        closeDrawer();
+        if (mCurrentConversationId < 0) {
+            toast("当前还没有对话");
+            return;
+        }
+        try {
+            final boolean[] withReason = new boolean[]{false};
+            final String[] items = new String[]{getString(R.string.dlg_export_reason) + "
+"
+                    + getString(R.string.dlg_export_hint)};
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.dlg_export_title)
+                    .setMultiChoiceItems(items, new boolean[]{false},
+                            new DialogInterface.OnMultiChoiceClickListener() {
+                                @Override
+                                public void onClick(DialogInterface dialog, int which, boolean isChecked) {
+                                    withReason[0] = isChecked;
+                                }
+                            })
+                    .setPositiveButton(R.string.dlg_ok, new DialogInterface.OnClickListener() {
+                        @Override
+                        public void onClick(DialogInterface dialog, int which) {
+                            doExport(withReason[0]);
+                        }
+                    })
+                    .setNegativeButton(R.string.dlg_cancel, null)
+                    .show();
+        } catch (Throwable t) {
+            toast(safeMsg(t));
+        }
+    }
+
+    /** 真正执行导出（可能在非主线程文件 IO，这里同步做，文件很小） */
+    private void doExport(boolean withReason) {
+        try {
+            String title = null;
+            if (mDb != null) {
+                Conversation c = mDb.getConversation(mCurrentConversationId);
+                if (c != null) title = c.title;
+            }
+            ConversationExporter.Result r = ConversationExporter.export(
+                    this, mDb, mCurrentConversationId, title, withReason);
+            if (r.ok) {
+                toast(getString(R.string.msg_export_ok, r.path, r.msgCount));
+            } else {
+                toast(getString(R.string.msg_export_fail,
+                        r.message == null ? "未知原因" : r.message));
+            }
+        } catch (Throwable t) {
+            toast(getString(R.string.msg_export_fail, safeMsg(t)));
         }
     }
 

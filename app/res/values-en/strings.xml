@@ -60,7 +60,7 @@
     <string name="model_picker_title">Select Model</string>
     <string name="set_about_text">"App name: Old AI Chat Open Source Release
 
-Current version: 1.7-root.8 (versionCode 17)
+Current version: 1.7-root.9 (versionCode 18)
 
 This build adds: AI system commands (root), with 3-tier risk gating
 
@@ -176,4 +176,11 @@ settings get</string>
     <string name="shell_status_fail">No root; commands run with normal app privileges</string>
     <string name="set_shell_enabled_toast">AI system commands enabled; re-enter the chat for the tool to appear</string>
     <string name="set_shell_high_toast">Dangerous commands released, make sure you accept the risk</string>
+    <string name="action_export">Export</string>
+    <string name="dlg_export_title">Export conversation</string>
+    <string name="dlg_export_reason">Include reasoning</string>
+    <string name="dlg_export_hint">Saved to Download folder</string>
+    <string name="msg_export_ok">Exported to %1$s
+%2$d messages</string>
+    <string name="msg_export_fail">Export failed: %1$s</string>
 </resources>
